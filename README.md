@@ -15,6 +15,8 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 > **Key-mode only.** This package authenticates with an `msk_` Bearer API key. The x402 pay-per-call micropayment rail is Solana-native and is **not** ported here — for keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
 
+New customers get a **5-day free trial** of Pro or Ultra when you pay by card — full access, nothing charged during the trial, cancel anytime. Start at [madeonsol.com/pricing](https://madeonsol.com/pricing).
+
 ## Install
 
 ```bash
