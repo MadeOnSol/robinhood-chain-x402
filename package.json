@@ -1,6 +1,6 @@
 {
   "name": "robinhood-chain-x402",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK for the MadeOnSol Robinhood Chain (chain id 4663) API — EVM-native KOL trades, the DEX trade tape, token discovery/bundles/candles, deployer reputation, and smart-money wallets. Key-mode (msk_ Bearer). Free tier at madeonsol.com/pricing.",
   "type": "module",
   "main": "./dist/index.js",
