@@ -4,7 +4,7 @@
  *
  * Robinhood Chain is an Arbitrum Orbit L2. This package is **key-mode only**:
  * it authenticates with an `msk_` Bearer API key against the Robinhood Chain
- * (/api/v1/rhc/…) endpoints. The x402 pay-per-call rail is Solana-native and is NOT ported here
+ * (/api/v1/rhc/…) endpoints. The x402 pay-per-call rail is live on Robinhood Chain too (6 keyless endpoints), but its signing path is NOT ported here
  * — see the Solana `madeonsol-x402` package for on-chain USDC micropayments.
  *
  * Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing —
@@ -292,8 +292,15 @@ export class RobinhoodChainX402 {
 
   /**
    * Deployer reputation leaderboard — RHC deployers ranked by reputation over
-   * every indexed launchpad token (40k+ deployers). `graduation_rate` = share at
-   * $40K+ peak MC; `runner_rate` = share at $100K+. Tier: **BASIC**.
+   * every indexed launchpad token (99k+ deployers). `graduation_rate` = share at
+   * $40K+ peak MC; `runner_rate` = share at $100K+.
+   *
+   * Since migrations 267 + 269 the `elite`/`good` **tier** rides `runner_rate`
+   * ($100K) AND requires 24h of deployer history — elite = 5+ tokens, 24h+ old,
+   * `runner_rate >= 0.50`; good = same with `>= 0.25`. `graduation_rate` still
+   * means the $40K bar and is still returned, but it no longer sets the tier (it
+   * proved farmable); only `spammer` still keys off it (20+ tokens,
+   * `graduation_rate < 0.05`). Tier: **BASIC**.
    * `GET /rhc/deployer-hunter/leaderboard`
    */
   async deployerLeaderboard(params?: DeployerLeaderboardParams): Promise<DeployerLeaderboardResponse> {

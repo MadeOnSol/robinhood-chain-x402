@@ -14,7 +14,11 @@ export type Chain = "robinhood";
 /** Trade side. */
 export type TradeAction = "buy" | "sell";
 
-/** Deployer reputation tier (elite → spammer). */
+/**
+ * Deployer reputation tier (elite → spammer). `elite`/`good` ride `runner_rate`
+ * (the $100K peak-MC milestone) and require 24h of deployer history; `spammer`
+ * keys off `graduation_rate` (the $40K bar). See `deployerLeaderboard()`.
+ */
 export type DeployerTier = "elite" | "good" | "neutral" | "spammer";
 
 /** Uniswap DEX versions live on Robinhood Chain. */
@@ -506,6 +510,7 @@ export interface RhcDeployer {
   launchpads: string[];
   first_deploy_at: string | null;
   last_deploy_at: string | null;
+  /** elite/good = `runner_rate` ($100K) + 24h of history; spammer = $40K `graduation_rate`. */
   tier: DeployerTier;
 }
 
@@ -532,6 +537,7 @@ export interface RhcDeployerProfile {
   launchpads: string[];
   first_deploy_at: string | null;
   last_deploy_at: string | null;
+  /** elite/good = `runner_rate` ($100K) + 24h of history; spammer = $40K `graduation_rate`. */
   tier: DeployerTier;
 }
 

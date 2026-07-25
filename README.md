@@ -13,7 +13,7 @@ Robinhood Chain is an Arbitrum Orbit L2. This SDK gives you the same intel you g
 
 RHC coverage is **bundled into every tier at no extra cost** — same API key, same base URL. Get a free key (200 req/day, no card) at [madeonsol.com/pricing](https://madeonsol.com/pricing).
 
-> **Key-mode only.** This package authenticates with an `msk_` Bearer API key. The x402 pay-per-call micropayment rail is Solana-native and is **not** ported here — for keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+> **Key-mode only.** This package authenticates with an `msk_` Bearer API key and calls the keyed Robinhood Chain v1 routes listed below. A keyless x402 pay-per-call rail for Robinhood Chain **does** exist — a deliberately narrow 6-endpoint subset with dual-accept payment (USDG on Robinhood Chain, or USDC on Solana), discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402) — but the EVM signing path is **not** bundled in this SDK yet; agents pay it directly from the self-describing 402 challenge. For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
 
 New customers get a **3-day free trial** of Pro or Ultra when you pay by card — full access, nothing charged during the trial, cancel anytime. Start at [madeonsol.com/pricing](https://madeonsol.com/pricing).
 
@@ -82,11 +82,13 @@ Every method maps 1:1 to a GET /api/v1/rhc/… route. Fields are EVM-native.
 
 | Method | Route | Tier | Description |
 |---|---|---|---|
-| `deployerLeaderboard(params?)` | `/api/v1/rhc/deployer-hunter/leaderboard` | BASIC | Deployers ranked by reputation — `graduation_rate` ($40K+ peak MC), `runner_rate` ($100K+) |
+| `deployerLeaderboard(params?)` | `/api/v1/rhc/deployer-hunter/leaderboard` | BASIC | 99k+ deployers ranked by reputation — `graduation_rate` ($40K+ peak MC), `runner_rate` ($100K+) |
 | `deployer(address)` | `/api/v1/rhc/deployer-hunter/{address}` | BASIC | Single deployer profile + 50 most recent tokens (unknown wallets → `is_deployer: false`) |
 | `alphaWallets(params?)` | `/api/v1/rhc/alpha-wallets` | PRO+ | Smart-money wallets ranked by realized performance — `net_eth`, `win_rate`, `memecoin_share`, `likely_bot` |
 
 ### Examples
+
+> **Deployer tiers ride `runner_rate`, not `graduation_rate`.** Since migrations 267 + 269, `elite` = 5+ tokens, 24h+ of deployer history, `runner_rate >= 0.50` ($100K+ peak MC); `good` = same with `>= 0.25`. `graduation_rate` still means the $40K bar and is still returned on every row — it just no longer sets the tier (it proved farmable by operators rotating wallets). Only `spammer` still keys off it (20+ tokens, `graduation_rate < 0.05`).
 
 ```ts
 // Deployer reputation leaderboard — elite deployers first
