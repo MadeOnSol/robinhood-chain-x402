@@ -15,8 +15,6 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 > **Key-mode only.** This package authenticates with an `msk_` Bearer API key and calls the keyed Robinhood Chain v1 routes listed below. A keyless x402 pay-per-call rail for Robinhood Chain **does** exist — a deliberately narrow 6-endpoint subset with dual-accept payment (USDG on Robinhood Chain, or USDC on Solana), discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402) — but the EVM signing path is **not** bundled in this SDK yet; agents pay it directly from the self-describing 402 challenge. For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
 
-New customers get a **3-day free trial** of Pro or Ultra when you pay by card — full access, nothing charged during the trial, cancel anytime. Start at [madeonsol.com/pricing](https://madeonsol.com/pricing).
-
 ## Install
 
 ```bash
