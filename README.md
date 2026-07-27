@@ -102,7 +102,7 @@ const { wallets } = await client.alphaWallets({ classification: "smart_money", m
 
 ## Streaming
 
-Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/stream`). Handles the token fetch + 24h refresh, auto-reconnect with backoff, and heartbeat liveness. Two RHC channels: `rhc:kol_trades` (the KOL tape) and `rhc:trades` (the full DEX firehose). PRO/ULTRA.
+Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch + 24h refresh, auto-reconnect with backoff, and heartbeat liveness. Two RHC channels: `rhc:kol_trades` (the KOL tape) and `rhc:trades` (the full DEX firehose). PRO/ULTRA.
 
 ```ts
 const stream = client.stream();
