@@ -288,6 +288,73 @@ export class RobinhoodChainX402 {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/bundle`);
   }
 
+  /**
+   * Top traders of one token, ranked by REALIZED ETH flow (`sell − buy`),
+   * enriched with wallet reputation, dump-cluster membership and early-buyer
+   * rank. **`net_eth` is not PnL** — it does not value a trader's remaining bag,
+   * so a wallet that bought and still holds ranks last. Tier: **PRO+** (50 rows;
+   * ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/top-traders`
+   */
+  async tokenTopTraders(
+    address: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/top-traders`, params);
+  }
+
+  /**
+   * Net buy/sell flow split by mutually-exclusive trader cohort. Sign
+   * convention: `net_eth = sell − buy`, so POSITIVE means that cohort
+   * **distributed**. Ladder order is priority order: kol → bot → dump_cluster →
+   * early_buyer → unprofiled → smart_money → retail. Tier: **PRO+**.
+   * `GET /rhc/tokens/{address}/flow`
+   */
+  async tokenFlow(address: string, window?: "1h" | "6h" | "24h" | "7d"): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/flow`, { window });
+  }
+
+  /**
+   * Peak market cap, drawdown and running high-water curve. Returns **two peaks
+   * because they disagree**: `peak_mc_usd_recorded` is the stored high-water mark
+   * other RHC surfaces key off (sampled from write batches, so it can undercount
+   * an intra-batch spike), and `peak_mc_usd_observed` is the max of 1-minute
+   * candle highs — trade-level truth, always ≥ recorded. Tier: **PRO+**.
+   * `GET /rhc/tokens/{address}/peak-history`
+   */
+  async tokenPeakHistory(
+    address: string,
+    params?: { window?: "24h" | "7d" | "30d" | "all"; curve?: "true" | "false" }
+  ): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/peak-history`, params);
+  }
+
+  /**
+   * EVM-native risk, computed **live** on-chain. Not the Solana model: EVM has no
+   * mint/freeze authority, and only ~2% of RHC tokens expose an owner function,
+   * so an absent flag is the norm rather than a safety signal. The discriminating
+   * signals are proxy upgradeability, LP custody and **sellability**, which is
+   * simulated at the chain head and never cached. Tier: **PRO+**.
+   * `GET /rhc/tokens/{address}/risk`
+   */
+  async tokenRisk(address: string): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/risk`);
+  }
+
+  /**
+   * Exact holder set + concentration, folded from ERC-20 `Transfer` logs (not
+   * trade-derived) and reconciled against on-chain `totalSupply()`. **Check
+   * `verified` first.** Concentration excludes pools and burns from the
+   * circulating denominator and reports them separately; `balance` is a raw
+   * uint256 returned as a decimal string. Tier: **PRO+** (50 rows;
+   * ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/holders`
+   */
+  async tokenHolders(
+    address: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params);
+  }
+
   /* ── Deployer hunter ── */
 
   /**
