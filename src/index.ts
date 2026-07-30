@@ -184,7 +184,9 @@ export class RobinhoodChainX402 {
 
   /**
    * Real-time KOL trade feed on Robinhood Chain — every buy/sell from tracked
-   * Solana KOLs' verified EVM wallets, attributed via tx.from. Tier: **BASIC**.
+   * Solana KOLs' verified EVM wallets, attributed to the effective trading
+   * account (`tx.from`, or the ERC-4337 userOp sender when the trade was
+   * bundled — never the bundler). Tier: **BASIC**.
    * `GET /rhc/kol/feed`
    */
   async kolFeed(params?: KolFeedParams): Promise<KolFeedResponse> {
@@ -220,8 +222,10 @@ export class RobinhoodChainX402 {
 
   /**
    * Robinhood Chain DEX trade tape — every Uniswap v2/v3/v4 swap, each row
-   * carrying the real trader wallet (`trader_eoa`), gas/ordering for MEV
-   * analysis, and KOL/deployer flags. Cursor via `next_before`. Tier: **PRO+**.
+   * carrying the effective trading account (`trader_eoa` — `tx.from`, or the
+   * ERC-4337 userOp sender when bundled; never the router or the bundler),
+   * gas/ordering for MEV analysis, and KOL/deployer flags. Cursor via
+   * `next_before`. Tier: **PRO+**.
    * `GET /rhc/trades`
    */
   async trades(params?: TradesParams): Promise<TradesResponse> {

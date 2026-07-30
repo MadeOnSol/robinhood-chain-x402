@@ -195,7 +195,7 @@ export interface RhcTrade {
   pool: string;
   /** Swap-log recipient — the ROUTER for aggregated swaps. Use trader_eoa for analytics. */
   trader: string | null;
-  /** Authoritative trader wallet (tx.from). */
+  /** Effective trading account — `tx.from`, or the ERC-4337 userOp sender when bundled. Never the router or the bundler. */
   trader_eoa: string | null;
   /** Router/aggregator contract (tx.to). */
   router: string | null;

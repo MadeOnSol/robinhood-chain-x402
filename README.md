@@ -63,7 +63,9 @@ Every method maps 1:1 to a GET /api/v1/rhc/… route. Fields are EVM-native.
 
 | Method | Route | Tier | Description |
 |---|---|---|---|
-| `trades(params?)` | `/api/v1/rhc/trades` | PRO+ | Every Uniswap v2/v3/v4 swap with the real `trader_eoa`, gas/ordering for MEV, and KOL/deployer flags |
+| `trades(params?)` | `/api/v1/rhc/trades` | PRO+ | Every Uniswap v2/v3/v4 swap with the effective `trader_eoa`, gas/ordering for MEV, and KOL/deployer flags |
+
+> **`trader_eoa` is the effective trading account**, not simply `tx.from`. On an ordinary transaction it *is* `tx.from`; when the trade was bundled through ERC-4337 it is the userOp sender (`UserOperationEvent`), never the bundler that relayed it. It is still an EOA either way — on Robinhood Chain a userOp sender is a normal EOA carrying an EIP-7702 delegation. Use `trader` only for the swap-log recipient (the router on aggregated swaps).
 
 ### Token discovery + intelligence
 
