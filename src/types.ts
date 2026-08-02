@@ -632,6 +632,415 @@ export interface AlphaWalletsResponse {
   has_more: boolean;
 }
 
+/* ── RHC rule engines: shared ── */
+
+/**
+ * Where a fired rule is delivered. `websocket` requires no `webhook_url`;
+ * anything else does. A `webhook_secret` is minted (once) only when a webhook
+ * URL is set — payloads are signed HMAC-SHA256 over `<timestamp>.<body>` in the
+ * `X-MadeOnSol-Signature` header.
+ */
+export type DeliveryMode = "webhook" | "websocket" | "both";
+
+/** Every rule-engine DELETE returns this. */
+export interface RhcDeletedResponse {
+  chain: Chain;
+  deleted: boolean;
+}
+
+/* ── /rhc/copytrade/subscriptions ── */
+
+/** Which side of the tape a copy-trade rule reacts to. */
+export type CopyTradeOnlyAction = "buy" | "sell" | "both";
+
+/** How the suggested size is derived from the source trade. */
+export type CopyTradeSizingMode = "fixed" | "proportional" | "percent_source";
+
+export interface RhcCopyTradeSubscription {
+  /** Numeric identity PK. */
+  id: number;
+  name: string | null;
+  /** Lowercase 0x wallets this rule follows (the API lowercases on write). */
+  source_wallets: string[];
+  /** Minimum source-trade size in ETH for the rule to fire. */
+  min_trade_eth: number;
+  only_action: CopyTradeOnlyAction;
+  sizing_mode: CopyTradeSizingMode;
+  /** ETH when `sizing_mode` is `fixed`, else a multiplier of the source trade. */
+  sizing_amount: number;
+  delivery_mode: DeliveryMode;
+  webhook_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CopyTradeListResponse {
+  chain: Chain;
+  subscriptions: RhcCopyTradeSubscription[];
+}
+
+export interface CopyTradeCreateParams {
+  name?: string;
+  /** 1–250 EVM addresses (0x, 40 hex); the per-tier cap is enforced server-side. */
+  source_wallets: string[];
+  /** Default 0. */
+  min_trade_eth?: number;
+  /** Default `buy`. */
+  only_action?: CopyTradeOnlyAction;
+  /** Default `fixed`. */
+  sizing_mode?: CopyTradeSizingMode;
+  sizing_amount: number;
+  /** Default `webhook`. */
+  delivery_mode?: DeliveryMode;
+  /** HTTPS only. Required unless `delivery_mode` is `websocket`. */
+  webhook_url?: string;
+}
+
+export interface CopyTradeCreateResponse {
+  chain: Chain;
+  subscription: RhcCopyTradeSubscription;
+  /** Shown ONCE — null when `delivery_mode` is `websocket`. */
+  webhook_secret: string | null;
+  note: string;
+}
+
+export interface CopyTradeGetResponse {
+  chain: Chain;
+  subscription: RhcCopyTradeSubscription;
+}
+
+export interface CopyTradeUpdateParams {
+  /** `null` clears the label. */
+  name?: string | null;
+  source_wallets?: string[];
+  min_trade_eth?: number;
+  only_action?: CopyTradeOnlyAction;
+  sizing_mode?: CopyTradeSizingMode;
+  sizing_amount?: number;
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string | null;
+  is_active?: boolean;
+}
+
+/* ── /rhc/copytrade/signals ── */
+
+export interface CopyTradeSignalsParams {
+  /** Scope to one of your rules — 404 if you do not own it. */
+  subscription_id?: number;
+  /** ISO 8601 lower bound on `fired_at`. */
+  since?: string;
+  /** 1–500, default 50. */
+  limit?: number;
+}
+
+export interface RhcCopyTradeSignal {
+  id: number;
+  subscription_id: number;
+  fired_at: string;
+  /** The followed wallet whose trade triggered the fire. */
+  source_wallet: string;
+  action: TradeAction;
+  token_address: string;
+  token_symbol: string | null;
+  token_name: string | null;
+  /** Size of the source trade, ETH. */
+  source_eth_amount: number | null;
+  /** Size your rule's sizing_mode implies, ETH. */
+  suggested_eth_amount: number | null;
+  price_usd: number | null;
+  dex: string | null;
+  tx_hash: string;
+  delivered: boolean;
+  delivered_at: string | null;
+}
+
+export interface CopyTradeSignalsResponse {
+  chain: Chain;
+  signals: RhcCopyTradeSignal[];
+  count: number;
+}
+
+/* ── /rhc/price-alerts ── */
+
+/** Lifecycle of an alert. Terminal states are `recovered` and `expired`. */
+export type PriceAlertStatus = "watching" | "dipped" | "recovered" | "expired";
+
+export interface RhcPriceAlert {
+  id: number;
+  name: string | null;
+  token_address: string;
+  token_symbol: string | null;
+  /** MC captured at creation — an alert is a delta from the moment you set it. */
+  baseline_mc_usd: number;
+  drop_pct: number;
+  /** Null for a dip-only, terminal alert. */
+  recovery_pct: number | null;
+  status: PriceAlertStatus;
+  /** Lowest MC seen since the dip fired. */
+  dip_low_mc_usd: number | null;
+  dip_fired_at: string | null;
+  delivery_mode: DeliveryMode;
+  webhook_url: string | null;
+  is_active: boolean;
+  /** Alerts self-expire 30 days after creation. */
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PriceAlertListResponse {
+  chain: Chain;
+  alerts: RhcPriceAlert[];
+}
+
+export interface PriceAlertCreateParams {
+  name?: string;
+  /** Must already be tracked on RHC with a market cap, else 400. */
+  token_address: string;
+  /** 0.01–99.99. */
+  drop_pct: number;
+  /** 0.01–1000. Omit for a dip-only, terminal alert. */
+  recovery_pct?: number;
+  /** Default `webhook`. */
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string;
+}
+
+/**
+ * How RHC alerts are evaluated. **Not parity with Solana**: these are polled off
+ * `rhc_token_prices` rather than reacting to a live price loop, because the RHC
+ * price writer emits no pg_notify. Effective latency is the poll interval plus
+ * the token's own price-update cadence.
+ */
+export interface PriceAlertEvaluation {
+  mode: "polled";
+  interval_seconds: number;
+  note: string;
+}
+
+export interface PriceAlertCreateResponse {
+  chain: Chain;
+  alert: RhcPriceAlert;
+  /** Shown ONCE — null when `delivery_mode` is `websocket`. */
+  webhook_secret: string | null;
+  evaluation: PriceAlertEvaluation;
+  note: string;
+}
+
+export interface PriceAlertGetResponse {
+  chain: Chain;
+  alert: RhcPriceAlert;
+}
+
+/**
+ * `token_address`, `drop_pct` and `recovery_pct` are immutable — retuning a
+ * threshold mid-flight would make the alert's recorded events uninterpretable.
+ * Delete and recreate instead.
+ */
+export interface PriceAlertUpdateParams {
+  name?: string | null;
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string | null;
+  is_active?: boolean;
+}
+
+/* ── /rhc/price-alerts/events ── */
+
+export type PriceAlertEventType = "dip" | "recovery";
+
+export interface PriceAlertEventsParams {
+  /** Scope to one of your alerts — 404 if you do not own it. */
+  alert_id?: number;
+  event_type?: PriceAlertEventType;
+  /** ISO 8601 lower bound on `fired_at`. */
+  since?: string;
+  /** 1–500, default 50. */
+  limit?: number;
+}
+
+export interface RhcPriceAlertEvent {
+  id: number;
+  alert_id: number;
+  event_type: PriceAlertEventType;
+  fired_at: string;
+  token_address: string;
+  baseline_mc_usd: number;
+  current_mc_usd: number;
+  /** Measured drop at fire time, percent. */
+  drop_pct_actual: number | null;
+  dip_low_mc_usd: number | null;
+  /** Measured bounce off the dip low, percent — recovery events only. */
+  recovery_pct_actual: number | null;
+  delivered: boolean;
+  delivered_at: string | null;
+}
+
+export interface PriceAlertEventsResponse {
+  chain: Chain;
+  events: RhcPriceAlertEvent[];
+  count: number;
+}
+
+/* ── /rhc/kol/coordination/alerts ── */
+
+export interface RhcCoordinationAlertRule {
+  /** UUID. */
+  id: string;
+  name: string | null;
+  /** Distinct tracked KOL buyers needed to fire (2–50). */
+  min_kols: number;
+  /** Rolling window those buys must land inside (1–60). */
+  window_minutes: number;
+  min_score: number;
+  /** Minutes before the same token can fire again (1–1440). */
+  cooldown_min: number;
+  /** Score jump that breaks the cooldown early (0–100). */
+  score_jump_break: number;
+  min_mc_usd: number | null;
+  max_mc_usd: number | null;
+  delivery_mode: DeliveryMode;
+  webhook_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CoordinationAlertListResponse {
+  chain: Chain;
+  rules: RhcCoordinationAlertRule[];
+}
+
+export interface CoordinationAlertCreateParams {
+  name?: string;
+  /** 2–50, default 3. */
+  min_kols?: number;
+  /** 1–60, default 15. */
+  window_minutes?: number;
+  /** 0–100, default 0. */
+  min_score?: number;
+  /** 1–1440, default 30. */
+  cooldown_min?: number;
+  /** 0–100, default 20. */
+  score_jump_break?: number;
+  min_mc_usd?: number | null;
+  max_mc_usd?: number | null;
+  /** Default `websocket`. */
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string;
+}
+
+/**
+ * Which scorer components are real on RHC. Scores are comparable to the Solana
+ * coordination scorer, but `earliness` is defaulted (RHC has no early-entry
+ * equivalent) while `quality` is a real KOL win-rate. Each fired signal records
+ * the same breakdown in its `score_inputs`.
+ */
+export interface CoordinationAlertScoring {
+  score_version: string;
+  quality: string;
+  earliness: string;
+  note: string;
+}
+
+export interface CoordinationAlertCreateResponse {
+  chain: Chain;
+  rule: RhcCoordinationAlertRule;
+  /** Shown ONCE — null when `delivery_mode` is `websocket`. */
+  webhook_secret: string | null;
+  scoring: CoordinationAlertScoring;
+  note: string;
+}
+
+export interface CoordinationAlertGetResponse {
+  chain: Chain;
+  rule: RhcCoordinationAlertRule;
+}
+
+export interface CoordinationAlertUpdateParams {
+  name?: string | null;
+  min_kols?: number;
+  window_minutes?: number;
+  min_score?: number;
+  cooldown_min?: number;
+  score_jump_break?: number;
+  min_mc_usd?: number | null;
+  max_mc_usd?: number | null;
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string | null;
+  is_active?: boolean;
+}
+
+/* ── /rhc/kol/first-touches/subscriptions ── */
+
+/** Auto-classified trader style of the first-touching KOL. */
+export type FirstTouchStrategy = "scalper" | "day_trader" | "swing" | "inactive" | "unscored";
+
+/**
+ * Push filters. Deliberately NOT the Solana set: RHC has no scout score, so
+ * `min_scout_tier` / `min_n_touches` are absent rather than silently matching
+ * nothing. Unknown keys are rejected with a 400.
+ */
+export interface FirstTouchFilters {
+  /** Only this KOL's first touches (0x, 40 hex). */
+  kol?: string;
+  /** Minimum first-buy size in ETH (0–100000). */
+  min_first_buy_eth?: number;
+  /** 0–1. Win-rate on CLOSED positions; a KOL who has never sold is dropped, not counted as a loser. */
+  min_kol_winrate?: number;
+  strategy?: FirstTouchStrategy;
+  min_mc_usd?: number;
+  max_mc_usd?: number;
+}
+
+export interface RhcFirstTouchSubscription {
+  /** UUID. */
+  id: string;
+  name: string | null;
+  filters: FirstTouchFilters;
+  delivery_mode: DeliveryMode;
+  webhook_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FirstTouchSubscriptionListResponse {
+  chain: Chain;
+  subscriptions: RhcFirstTouchSubscription[];
+}
+
+export interface FirstTouchSubscriptionCreateParams {
+  name?: string;
+  /** Default `{}` — every first touch. */
+  filters?: FirstTouchFilters;
+  /** Default `websocket`. */
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string;
+}
+
+export interface FirstTouchSubscriptionCreateResponse {
+  chain: Chain;
+  subscription: RhcFirstTouchSubscription;
+  /** Shown ONCE — null when `delivery_mode` is `websocket`. */
+  webhook_secret: string | null;
+  note: string;
+}
+
+export interface FirstTouchSubscriptionGetResponse {
+  chain: Chain;
+  subscription: RhcFirstTouchSubscription;
+}
+
+export interface FirstTouchSubscriptionUpdateParams {
+  name?: string | null;
+  /** Whole-object REPLACE, not a merge — merging would make removing a filter inexpressible. */
+  filters?: FirstTouchFilters;
+  delivery_mode?: DeliveryMode;
+  webhook_url?: string | null;
+  is_active?: boolean;
+}
+
 /* ── Streaming ── */
 
 export interface StreamToken {

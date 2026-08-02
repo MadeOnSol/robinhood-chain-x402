@@ -46,9 +46,9 @@ const client = new RobinhoodChainX402({
 });
 ```
 
-## Endpoints — all 14 Robinhood Chain routes
+## Endpoints — all 41 Robinhood Chain routes
 
-Every method maps 1:1 to a GET /api/v1/rhc/… route. Fields are EVM-native.
+Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everything is a GET except the four rule engines at the bottom, which are full CRUD.
 
 ### KOL intelligence
 
@@ -77,6 +77,11 @@ Every method maps 1:1 to a GET /api/v1/rhc/… route. Fields are EVM-native.
 | `tokenKolConsensus(address)` | `/api/v1/rhc/tokens/{address}/kol-consensus` | PRO+ | KOL positioning — buyers vs sellers, exit rate, `net_flow_eth`, median entry MC (ULTRA adds wallet lists) |
 | `tokenBuyerQuality(address)` | `/api/v1/rhc/tokens/{address}/buyer-quality` | BASIC | 0–100 early-buyer quality with bundle-buyer + dump-cluster legs |
 | `tokenBundle(address)` | `/api/v1/rhc/tokens/{address}/bundle` | BASIC | Launch-bundle detection (`same_block`) + how much the cohort still holds |
+| `tokenTopTraders(address, params?)` | `/api/v1/rhc/tokens/{address}/top-traders` | PRO+ | Traders ranked by REALIZED ETH (`sell − buy`) — **not PnL**; a wallet still holding ranks last |
+| `tokenFlow(address, window?)` | `/api/v1/rhc/tokens/{address}/flow` | PRO+ | Net flow split by cohort (kol → bot → dump_cluster → early_buyer → …); positive `net_eth` means that cohort distributed |
+| `tokenPeakHistory(address, params?)` | `/api/v1/rhc/tokens/{address}/peak-history` | PRO+ | Two peaks because they disagree — `peak_mc_usd_recorded` (stored high-water) vs `peak_mc_usd_observed` (candle highs) |
+| `tokenRisk(address)` | `/api/v1/rhc/tokens/{address}/risk` | PRO+ | EVM-native risk computed live on-chain — proxy upgradeability, LP custody, simulated **sellability** (never cached) |
+| `tokenHolders(address, params?)` | `/api/v1/rhc/tokens/{address}/holders` | PRO+ | Exact holder set from `Transfer` logs + concentration. **Check `verified` first**; `balance` is a raw uint256 string |
 
 ### Deployer hunter + smart money
 
@@ -85,6 +90,60 @@ Every method maps 1:1 to a GET /api/v1/rhc/… route. Fields are EVM-native.
 | `deployerLeaderboard(params?)` | `/api/v1/rhc/deployer-hunter/leaderboard` | BASIC | 99k+ deployers ranked by reputation — `graduation_rate` ($40K+ peak MC), `runner_rate` ($100K+) |
 | `deployer(address)` | `/api/v1/rhc/deployer-hunter/{address}` | BASIC | Single deployer profile + 50 most recent tokens (unknown wallets → `is_deployer: false`) |
 | `alphaWallets(params?)` | `/api/v1/rhc/alpha-wallets` | PRO+ | Smart-money wallets ranked by realized performance — `net_eth`, `win_rate`, `memecoin_share`, `likely_bot` |
+
+### Rule engines — push, not polling
+
+Four server-side rule engines that watch the RHC tape for you and deliver over webhook or WebSocket. **Every quota is per chain** — configuring RHC rules never consumes your Solana budget. A `webhook_secret` is returned exactly once on create; payloads are signed HMAC-SHA256 over `` `<timestamp>.<body>` `` in the `X-MadeOnSol-Signature` header.
+
+| Method | Route | Tier | Description |
+|---|---|---|---|
+| `copyTradeList()` | `GET /api/v1/rhc/copytrade/subscriptions` | PRO+ | Your copy-trade rules |
+| `copyTradeCreate(params)` | `POST /api/v1/rhc/copytrade/subscriptions` | PRO+ | Follow up to 250 wallets; sizes are **ETH**, and there is no MC band (the RHC notify payload carries no market cap) |
+| `copyTradeGet(id)` | `GET /api/v1/rhc/copytrade/subscriptions/{id}` | PRO+ | One rule (numeric id) |
+| `copyTradeUpdate(id, params)` | `PATCH /api/v1/rhc/copytrade/subscriptions/{id}` | PRO+ | Partial update; the wallet cap is re-checked so a rule cannot be PATCHed past its tier |
+| `copyTradeDelete(id)` | `DELETE /api/v1/rhc/copytrade/subscriptions/{id}` | PRO+ | Delete a rule (signals cascade) |
+| `copyTradeSignals(params?)` | `GET /api/v1/rhc/copytrade/signals` | PRO+ | Fire history — the catch-up path for a missed webhook. Retained 7 days |
+| `priceAlertsList()` | `GET /api/v1/rhc/price-alerts` | PRO+ | Your price alerts |
+| `priceAlertsCreate(params)` | `POST /api/v1/rhc/price-alerts` | PRO+ | Baseline MC is captured at creation; token must already be tracked with an MC |
+| `priceAlertsGet(id)` | `GET /api/v1/rhc/price-alerts/{id}` | PRO+ | One alert (numeric id) |
+| `priceAlertsUpdate(id, params)` | `PATCH /api/v1/rhc/price-alerts/{id}` | PRO+ | Only `name`, `delivery_mode`, `webhook_url`, `is_active` are mutable |
+| `priceAlertsDelete(id)` | `DELETE /api/v1/rhc/price-alerts/{id}` | PRO+ | Delete an alert (events cascade) |
+| `priceAlertsEvents(params?)` | `GET /api/v1/rhc/price-alerts/events` | PRO+ | Dip/recovery fire history. Retained 30 days |
+| `coordinationAlertsList()` | `GET /api/v1/rhc/kol/coordination/alerts` | PRO+ | Your coordination rules |
+| `coordinationAlertsCreate(params)` | `POST /api/v1/rhc/kol/coordination/alerts` | PRO+ | Fire when N+ tracked KOLs buy the same token inside a rolling window |
+| `coordinationAlertsGet(id)` | `GET /api/v1/rhc/kol/coordination/alerts/{id}` | PRO+ | One rule (UUID) |
+| `coordinationAlertsUpdate(id, params)` | `PATCH /api/v1/rhc/kol/coordination/alerts/{id}` | PRO+ | Partial update |
+| `coordinationAlertsDelete(id)` | `DELETE /api/v1/rhc/kol/coordination/alerts/{id}` | PRO+ | Delete a rule (cooldown state + signals cascade) |
+| `firstTouchSubscriptionsList()` | `GET /api/v1/rhc/kol/first-touches/subscriptions` | ULTRA+ | Your first-touch subscriptions |
+| `firstTouchSubscriptionsCreate(params)` | `POST /api/v1/rhc/kol/first-touches/subscriptions` | ULTRA+ | Push when a token gets its FIRST tracked-KOL buy |
+| `firstTouchSubscriptionsGet(id)` | `GET /api/v1/rhc/kol/first-touches/subscriptions/{id}` | ULTRA+ | One subscription (UUID) |
+| `firstTouchSubscriptionsUpdate(id, params)` | `PATCH /api/v1/rhc/kol/first-touches/subscriptions/{id}` | ULTRA+ | `filters` is a whole-object **replace**, not a merge |
+| `firstTouchSubscriptionsDelete(id)` | `DELETE /api/v1/rhc/kol/first-touches/subscriptions/{id}` | ULTRA+ | Delete a subscription |
+
+> **RHC price alerts are polled (~15s), not live.** `rhc_token_prices` is written by the RHC ingester on a separate box and emits no `pg_notify`, so there is nothing to react to. Effective latency is that interval plus the token's own price-update cadence — **do not assume parity with the Solana alerts, which are sub-second.** The create response spells this out in its `evaluation` block.
+
+> **Coordination scoring is comparable to Solana, but not identical.** The shared v1 scorer runs, `quality` is a real KOL win-rate, and `earliness` is **defaulted** — RHC has no early-entry equivalent. Every fired signal records which components were real in `score_inputs`.
+
+> **First-touch filters are not the Solana set.** RHC has no scout score, so `min_scout_tier` and `min_n_touches` do not exist here rather than silently matching nothing; `min_kol_winrate` and `strategy` are the quality gates. Unknown filter keys are rejected with a 400, not ignored.
+
+```ts
+// Follow three wallets, 0.05 ETH per copy, pushed over WebSocket
+const { subscription, webhook_secret } = await client.copyTradeCreate({
+  name: "degen desk",
+  source_wallets: ["0xaaa...", "0xbbb...", "0xccc..."],
+  min_trade_eth: 0.01,
+  sizing_mode: "fixed",
+  sizing_amount: 0.05,
+  delivery_mode: "websocket",
+});
+
+// Catch up on anything the webhook missed in the last hour
+const since = new Date(Date.now() - 3_600_000).toISOString();
+const { signals } = await client.copyTradeSignals({ subscription_id: subscription.id, since });
+
+// Alert me if this token drops 30% from where it is right now
+await client.priceAlertsCreate({ token_address: "0xToken...", drop_pct: 30, recovery_pct: 15, webhook_url: "https://example.com/hook" });
+```
 
 ### Examples
 

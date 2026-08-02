@@ -33,6 +33,31 @@ import type {
   RhcDeployerProfileResponse,
   AlphaWalletsParams,
   AlphaWalletsResponse,
+  RhcDeletedResponse,
+  CopyTradeListResponse,
+  CopyTradeCreateParams,
+  CopyTradeCreateResponse,
+  CopyTradeGetResponse,
+  CopyTradeUpdateParams,
+  CopyTradeSignalsParams,
+  CopyTradeSignalsResponse,
+  PriceAlertListResponse,
+  PriceAlertCreateParams,
+  PriceAlertCreateResponse,
+  PriceAlertGetResponse,
+  PriceAlertUpdateParams,
+  PriceAlertEventsParams,
+  PriceAlertEventsResponse,
+  CoordinationAlertListResponse,
+  CoordinationAlertCreateParams,
+  CoordinationAlertCreateResponse,
+  CoordinationAlertGetResponse,
+  CoordinationAlertUpdateParams,
+  FirstTouchSubscriptionListResponse,
+  FirstTouchSubscriptionCreateParams,
+  FirstTouchSubscriptionCreateResponse,
+  FirstTouchSubscriptionGetResponse,
+  FirstTouchSubscriptionUpdateParams,
   StreamToken,
 } from "./types.js";
 
@@ -109,6 +134,46 @@ export type {
   AlphaWalletsParams,
   RhcAlphaWallet,
   AlphaWalletsResponse,
+  DeliveryMode,
+  RhcDeletedResponse,
+  CopyTradeOnlyAction,
+  CopyTradeSizingMode,
+  RhcCopyTradeSubscription,
+  CopyTradeListResponse,
+  CopyTradeCreateParams,
+  CopyTradeCreateResponse,
+  CopyTradeGetResponse,
+  CopyTradeUpdateParams,
+  CopyTradeSignalsParams,
+  RhcCopyTradeSignal,
+  CopyTradeSignalsResponse,
+  PriceAlertStatus,
+  RhcPriceAlert,
+  PriceAlertListResponse,
+  PriceAlertCreateParams,
+  PriceAlertEvaluation,
+  PriceAlertCreateResponse,
+  PriceAlertGetResponse,
+  PriceAlertUpdateParams,
+  PriceAlertEventType,
+  PriceAlertEventsParams,
+  RhcPriceAlertEvent,
+  PriceAlertEventsResponse,
+  RhcCoordinationAlertRule,
+  CoordinationAlertListResponse,
+  CoordinationAlertCreateParams,
+  CoordinationAlertScoring,
+  CoordinationAlertCreateResponse,
+  CoordinationAlertGetResponse,
+  CoordinationAlertUpdateParams,
+  FirstTouchStrategy,
+  FirstTouchFilters,
+  RhcFirstTouchSubscription,
+  FirstTouchSubscriptionListResponse,
+  FirstTouchSubscriptionCreateParams,
+  FirstTouchSubscriptionCreateResponse,
+  FirstTouchSubscriptionGetResponse,
+  FirstTouchSubscriptionUpdateParams,
   StreamToken,
 } from "./types.js";
 
@@ -134,8 +199,9 @@ export interface RateLimitInfo {
 /**
  * Key-mode client for the Robinhood Chain (chain id 4663) API surface — live KOL
  * trades, the DEX trade tape, token discovery/bundles/candles, deployer
- * reputation, and smart-money wallets. Every method maps 1:1 to a
- * GET /api/v1/rhc/… endpoint. RHC coverage is bundled into every tier.
+ * reputation, smart-money wallets, and the four push rule engines (copy-trade,
+ * price alerts, KOL coordination, first touches). Every method maps 1:1 to an
+ * /api/v1/rhc/… endpoint. RHC coverage is bundled into every tier.
  */
 export class RobinhoodChainX402 {
   private baseUrl: string;
@@ -176,6 +242,38 @@ export class RobinhoodChainX402 {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Robinhood Chain API error ${res.status}: ${body}`);
+    }
+    return res.json() as Promise<T>;
+  }
+
+  /**
+   * Body-capable sibling of `request()` for the rule-engine writes. Same
+   * `/api/v1` prefix, same rate-limit capture, same error shape — it only adds
+   * the method and an optional JSON body. DELETE sends no body.
+   */
+  private async send<T>(
+    method: "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const url = new URL(`/api/v1${path}`, this.baseUrl);
+    const headers = body === undefined
+      ? this.headers
+      : { ...this.headers, "Content-Type": "application/json" };
+    const res = await fetch(url.toString(), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    this.lastRateLimit = {
+      limit:     numHeader(res, "x-ratelimit-limit"),
+      remaining: numHeader(res, "x-ratelimit-remaining"),
+      reset:     numHeader(res, "x-ratelimit-reset"),
+      requestId: res.headers.get("x-request-id"),
+    };
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      throw new Error(`Robinhood Chain API error ${res.status}: ${errBody}`);
     }
     return res.json() as Promise<T>;
   }
@@ -397,6 +495,233 @@ export class RobinhoodChainX402 {
    */
   async alphaWallets(params?: AlphaWalletsParams): Promise<AlphaWalletsResponse> {
     return this.request("/rhc/alpha-wallets", params as Record<string, QueryValue>);
+  }
+
+  /* ── Rule engine: copy-trade ── */
+
+  /**
+   * Your Robinhood Chain copy-trade rules. Quotas are **per chain** — a full set
+   * of Solana copy-trade rules does not consume RHC capacity. Tier: **PRO+**.
+   * `GET /rhc/copytrade/subscriptions`
+   */
+  async copyTradeList(): Promise<CopyTradeListResponse> {
+    return this.request("/rhc/copytrade/subscriptions");
+  }
+
+  /**
+   * Create a copy-trade rule — fires when one of `source_wallets` trades on RHC.
+   * Amounts are ETH, not SOL, and there is no MC band: the RHC notify payload
+   * carries no market cap, so a band could only be a per-event DB lookup in the
+   * hot path of a ~3.3M trades/day chain. The response carries the
+   * `webhook_secret` **once**. Tier: **PRO+**.
+   * `POST /rhc/copytrade/subscriptions`
+   */
+  async copyTradeCreate(params: CopyTradeCreateParams): Promise<CopyTradeCreateResponse> {
+    return this.send("POST", "/rhc/copytrade/subscriptions", params);
+  }
+
+  /**
+   * Fetch one copy-trade rule. Tier: **PRO+**.
+   * `GET /rhc/copytrade/subscriptions/{id}`
+   * @param id Numeric rule id.
+   */
+  async copyTradeGet(id: number): Promise<CopyTradeGetResponse> {
+    return this.request(`/rhc/copytrade/subscriptions/${id}`);
+  }
+
+  /**
+   * Partially update a copy-trade rule. The per-tier wallet cap is re-checked,
+   * so a PRO rule cannot be PATCHed past its limit. Tier: **PRO+**.
+   * `PATCH /rhc/copytrade/subscriptions/{id}`
+   * @param id Numeric rule id.
+   */
+  async copyTradeUpdate(id: number, params: CopyTradeUpdateParams): Promise<CopyTradeGetResponse> {
+    return this.send("PATCH", `/rhc/copytrade/subscriptions/${id}`, params);
+  }
+
+  /**
+   * Delete a copy-trade rule (its fired signals cascade). Tier: **PRO+**.
+   * `DELETE /rhc/copytrade/subscriptions/{id}`
+   * @param id Numeric rule id.
+   */
+  async copyTradeDelete(id: number): Promise<RhcDeletedResponse> {
+    return this.send("DELETE", `/rhc/copytrade/subscriptions/${id}`);
+  }
+
+  /**
+   * Fire history for your copy-trade rules — the catch-up path when a webhook
+   * was missed or the WS channel dropped. Retained 7 days. Tier: **PRO+**.
+   * `GET /rhc/copytrade/signals`
+   */
+  async copyTradeSignals(params?: CopyTradeSignalsParams): Promise<CopyTradeSignalsResponse> {
+    return this.request("/rhc/copytrade/signals", params as Record<string, QueryValue>);
+  }
+
+  /* ── Rule engine: price alerts ── */
+
+  /**
+   * Your Robinhood Chain price alerts. Quota is per chain. Tier: **PRO+**.
+   * `GET /rhc/price-alerts`
+   */
+  async priceAlertsList(): Promise<PriceAlertListResponse> {
+    return this.request("/rhc/price-alerts");
+  }
+
+  /**
+   * Create a price alert. The baseline MC is captured **now**, so the alert is a
+   * delta from the moment you set it, and the token must already be tracked with
+   * a market cap. RHC alerts are POLLED (~15s off `rhc_token_prices`), not
+   * evaluated in a live price loop — the response's `evaluation` block says so.
+   * Tier: **PRO+**. `POST /rhc/price-alerts`
+   */
+  async priceAlertsCreate(params: PriceAlertCreateParams): Promise<PriceAlertCreateResponse> {
+    return this.send("POST", "/rhc/price-alerts", params);
+  }
+
+  /**
+   * Fetch one price alert. Tier: **PRO+**. `GET /rhc/price-alerts/{id}`
+   * @param id Numeric alert id.
+   */
+  async priceAlertsGet(id: number): Promise<PriceAlertGetResponse> {
+    return this.request(`/rhc/price-alerts/${id}`);
+  }
+
+  /**
+   * Update a price alert. Only `name`, `delivery_mode`, `webhook_url` and
+   * `is_active` are mutable — retuning a threshold mid-flight would make the
+   * alert's recorded events uninterpretable. Tier: **PRO+**.
+   * `PATCH /rhc/price-alerts/{id}`
+   * @param id Numeric alert id.
+   */
+  async priceAlertsUpdate(id: number, params: PriceAlertUpdateParams): Promise<PriceAlertGetResponse> {
+    return this.send("PATCH", `/rhc/price-alerts/${id}`, params);
+  }
+
+  /**
+   * Delete a price alert (its events cascade). Tier: **PRO+**.
+   * `DELETE /rhc/price-alerts/{id}`
+   * @param id Numeric alert id.
+   */
+  async priceAlertsDelete(id: number): Promise<RhcDeletedResponse> {
+    return this.send("DELETE", `/rhc/price-alerts/${id}`);
+  }
+
+  /**
+   * Dip and recovery events for your price alerts — the catch-up path for a
+   * missed webhook or a dropped WS channel. Retained 30 days. Tier: **PRO+**.
+   * `GET /rhc/price-alerts/events`
+   */
+  async priceAlertsEvents(params?: PriceAlertEventsParams): Promise<PriceAlertEventsResponse> {
+    return this.request("/rhc/price-alerts/events", params as Record<string, QueryValue>);
+  }
+
+  /* ── Rule engine: KOL coordination ── */
+
+  /**
+   * Your RHC coordination rules — fire when N+ tracked KOLs buy the same token
+   * inside a rolling window. Quota is per chain. Tier: **PRO+**.
+   * `GET /rhc/kol/coordination/alerts`
+   */
+  async coordinationAlertsList(): Promise<CoordinationAlertListResponse> {
+    return this.request("/rhc/kol/coordination/alerts");
+  }
+
+  /**
+   * Create a coordination rule. Scoring is the shared v1 scorer so the number is
+   * comparable to Solana, but the `earliness` component is defaulted on RHC
+   * (no early-entry equivalent) while `quality` is a real KOL win-rate — the
+   * response's `scoring` block records which components are real.
+   * Tier: **PRO+**. `POST /rhc/kol/coordination/alerts`
+   */
+  async coordinationAlertsCreate(
+    params: CoordinationAlertCreateParams
+  ): Promise<CoordinationAlertCreateResponse> {
+    return this.send("POST", "/rhc/kol/coordination/alerts", params);
+  }
+
+  /**
+   * Fetch one coordination rule. Tier: **PRO+**.
+   * `GET /rhc/kol/coordination/alerts/{id}`
+   * @param id Rule UUID.
+   */
+  async coordinationAlertsGet(id: string): Promise<CoordinationAlertGetResponse> {
+    return this.request(`/rhc/kol/coordination/alerts/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Partially update a coordination rule. Tier: **PRO+**.
+   * `PATCH /rhc/kol/coordination/alerts/{id}`
+   * @param id Rule UUID.
+   */
+  async coordinationAlertsUpdate(
+    id: string,
+    params: CoordinationAlertUpdateParams
+  ): Promise<CoordinationAlertGetResponse> {
+    return this.send("PATCH", `/rhc/kol/coordination/alerts/${encodeURIComponent(id)}`, params);
+  }
+
+  /**
+   * Delete a coordination rule (its cooldown state and fired signals cascade).
+   * Tier: **PRO+**. `DELETE /rhc/kol/coordination/alerts/{id}`
+   * @param id Rule UUID.
+   */
+  async coordinationAlertsDelete(id: string): Promise<RhcDeletedResponse> {
+    return this.send("DELETE", `/rhc/kol/coordination/alerts/${encodeURIComponent(id)}`);
+  }
+
+  /* ── Rule engine: KOL first touches ── */
+
+  /**
+   * Your RHC first-touch subscriptions — push when a token gets its FIRST
+   * tracked-KOL buy. Quota is per chain. Tier: **ULTRA+**.
+   * `GET /rhc/kol/first-touches/subscriptions`
+   */
+  async firstTouchSubscriptionsList(): Promise<FirstTouchSubscriptionListResponse> {
+    return this.request("/rhc/kol/first-touches/subscriptions");
+  }
+
+  /**
+   * Create a first-touch subscription. The filter set is deliberately not the
+   * Solana one: RHC has no scout score, so `min_scout_tier` / `min_n_touches`
+   * are absent rather than silently matching nothing — `min_kol_winrate` and
+   * `strategy` are the quality gates. Unknown filter keys are rejected, not
+   * ignored. Tier: **ULTRA+**. `POST /rhc/kol/first-touches/subscriptions`
+   */
+  async firstTouchSubscriptionsCreate(
+    params: FirstTouchSubscriptionCreateParams
+  ): Promise<FirstTouchSubscriptionCreateResponse> {
+    return this.send("POST", "/rhc/kol/first-touches/subscriptions", params);
+  }
+
+  /**
+   * Fetch one first-touch subscription. Tier: **ULTRA+**.
+   * `GET /rhc/kol/first-touches/subscriptions/{id}`
+   * @param id Subscription UUID.
+   */
+  async firstTouchSubscriptionsGet(id: string): Promise<FirstTouchSubscriptionGetResponse> {
+    return this.request(`/rhc/kol/first-touches/subscriptions/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Update a first-touch subscription. `filters` is a whole-object **replace**,
+   * not a merge — merging would make "remove this filter" inexpressible.
+   * Tier: **ULTRA+**. `PATCH /rhc/kol/first-touches/subscriptions/{id}`
+   * @param id Subscription UUID.
+   */
+  async firstTouchSubscriptionsUpdate(
+    id: string,
+    params: FirstTouchSubscriptionUpdateParams
+  ): Promise<FirstTouchSubscriptionGetResponse> {
+    return this.send("PATCH", `/rhc/kol/first-touches/subscriptions/${encodeURIComponent(id)}`, params);
+  }
+
+  /**
+   * Delete a first-touch subscription. Tier: **ULTRA+**.
+   * `DELETE /rhc/kol/first-touches/subscriptions/{id}`
+   * @param id Subscription UUID.
+   */
+  async firstTouchSubscriptionsDelete(id: string): Promise<RhcDeletedResponse> {
+    return this.send("DELETE", `/rhc/kol/first-touches/subscriptions/${encodeURIComponent(id)}`);
   }
 
   /* ── Streaming ── */
