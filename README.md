@@ -163,20 +163,40 @@ const { wallets } = await client.alphaWallets({ classification: "smart_money", m
 
 ## Streaming
 
-Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch + 24h refresh, auto-reconnect with backoff, and heartbeat liveness. Two RHC channels: `rhc:kol_trades` (the KOL tape) and `rhc:trades` (the full DEX firehose). PRO/ULTRA.
+Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch + 24h refresh, auto-reconnect with backoff, and heartbeat liveness. Six RHC channels:
+
+| Channel | Emits | Tier | Scope |
+|---|---|---|---|
+| `rhc:kol_trades` | `rhc:kol_trade` | PRO+ | broadcast — the live KOL tape |
+| `rhc:dex_trades` | `rhc:dex_trade` | **ULTRA+** | broadcast — the full DEX firehose |
+| `rhc:copytrade:signals` | `rhc:copytrade:signal` | PRO+ | user-scoped — only **your** rules' fires |
+| `rhc:price_alert:events` | `rhc:price_alert:dip`, `rhc:price_alert:recovery` | PRO+ | user-scoped; ~15s polled, not sub-second |
+| `rhc:kol:coordination` | `rhc:kol:coordination` | PRO+ | user-scoped — only **your** rules' fires |
+| `rhc:kol:first_touches` | `rhc:kol:first_touch` | PRO+ | broadcast — ULTRA gates only the first-touch *subscription CRUD*, not this channel |
+
+> **Deprecated:** `rhc:trades` was never a real channel — 0.4.0 subscribers got a `channels_rejected` warning and silence. The server now accepts it as an alias of `rhc:dex_trades` (and acks it under the canonical name), and the SDK keeps the literal marked `@deprecated` so 0.4.0 code compiles. Use `rhc:dex_trades`.
 
 ```ts
 const stream = client.stream();
 
 stream.on("rhc:kol_trade", (t) => console.log("KOL trade", t));
-stream.on("rhc:trade", (t) => console.log("DEX trade", t));
+stream.on("rhc:dex_trade", (t) => console.log("DEX trade", t)); // ULTRA+
 stream.on("open", () => console.log("connected to chain 4663"));
+// New in 0.5.0 — a refused channel (typo or tier gate) is surfaced instead of
+// leaving the stream silently quiet.
+stream.on("warning", (w) => console.warn("rejected:", w.code, w.rejected, w.valid_channels));
 
-stream.subscribe(["rhc:kol_trades", "rhc:trades"]);
+stream.subscribe(["rhc:kol_trades", "rhc:dex_trades"]);
 
 // later
 stream.close();
 ```
+
+### New in 0.5.0 — stream fixes
+
+- **Channel names corrected.** `StreamChannel` now lists the six real RHC channels above. 0.4.0's `rhc:trades` never existed server-side; it is now a server-accepted deprecated alias of `rhc:dex_trades` and stays in the union as `@deprecated`.
+- **Event names corrected.** The firehose broadcasts `rhc:dex_trade` — a 0.4.0 `on("rhc:trade", …)` handler never fired, and is now a **compile error** so you find it. `StreamEventName` covers all six channels' events.
+- **Server warnings surfaced.** `channels_rejected` frames used to be silently dropped; they now emit a typed `"warning"` lifecycle event (`StreamWarning`: `code`, `rejected`, `valid_channels`, `message`).
 
 ## Rate limits
 

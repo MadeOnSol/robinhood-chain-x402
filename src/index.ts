@@ -72,6 +72,7 @@ export type {
   StreamEventName,
   StreamEvent,
   StreamLifecycleEvent,
+  StreamWarning,
 } from "./stream.js";
 
 export type {
@@ -740,7 +741,10 @@ export class RobinhoodChainX402 {
   /**
    * Open a managed real-time Robinhood Chain WebSocket stream. Handles token
    * fetch + refresh, auto-reconnect with backoff, heartbeat liveness, and typed
-   * events for you. Channels: `rhc:kol_trades`, `rhc:trades`.
+   * events for you. Channels: `rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), plus
+   * the four rule-engine channels (`rhc:copytrade:signals`,
+   * `rhc:price_alert:events`, `rhc:kol:coordination`, `rhc:kol:first_touches`).
+   * Listen on `"warning"` to catch server `channels_rejected` frames.
    *
    * @example
    * const stream = client.stream();
