@@ -58,6 +58,19 @@ import type {
   FirstTouchSubscriptionCreateResponse,
   FirstTouchSubscriptionGetResponse,
   FirstTouchSubscriptionUpdateParams,
+  RhcWalletProfileResponse,
+  RhcWalletPnlResponse,
+  RhcWalletPositionsResponse,
+  WalletTradesParams,
+  RhcWalletTradesResponse,
+  WalletTrackerWatchlistResponse,
+  WalletTrackerAddParams,
+  WalletTrackerWalletResponse,
+  WalletTrackerRemovedResponse,
+  WalletTrackerTradesParams,
+  WalletTrackerTradesResponse,
+  WalletTrackerSummaryParams,
+  WalletTrackerSummaryResponse,
   StreamToken,
 } from "./types.js";
 
@@ -175,6 +188,34 @@ export type {
   FirstTouchSubscriptionCreateResponse,
   FirstTouchSubscriptionGetResponse,
   FirstTouchSubscriptionUpdateParams,
+  RhcWalletStats,
+  RhcWalletFlags,
+  RhcWalletDerived,
+  RhcWalletProfileResponse,
+  RhcPositionResult,
+  RhcWalletPnlSummary,
+  RhcPnlCurvePoint,
+  RhcClosedPosition,
+  RhcOpenPosition,
+  RhcWalletPnlNotes,
+  RhcWalletPnlResponse,
+  RhcWalletPositionsSummary,
+  RhcWalletPositionsResponse,
+  WalletTradesParams,
+  RhcWalletTrade,
+  RhcWalletTradesResponse,
+  RhcTrackedWallet,
+  WalletTrackerWatchlistResponse,
+  WalletTrackerAddParams,
+  WalletTrackerWalletResponse,
+  WalletTrackerRemovedResponse,
+  WalletTrackerTradesParams,
+  RhcTrackedWalletTrade,
+  WalletTrackerTradesResponse,
+  WalletTrackerSummaryParams,
+  RhcTrackedWalletStats,
+  RhcTrackedWalletSummary,
+  WalletTrackerSummaryResponse,
   StreamToken,
 } from "./types.js";
 
@@ -496,6 +537,129 @@ export class RobinhoodChainX402 {
    */
   async alphaWallets(params?: AlphaWalletsParams): Promise<AlphaWalletsResponse> {
     return this.request("/rhc/alpha-wallets", params as Record<string, QueryValue>);
+  }
+
+  /* ── Wallet intelligence ──
+   *
+   * All four read from ONE shared 90-day snapshot cache, so calling
+   * `wallet()` then `walletPnl()` then `walletPositions()` on the same address
+   * costs roughly one computation, not three — `cache_hit` tells you which
+   * call paid for it. Everything is ETH-denominated.
+   */
+
+  /**
+   * Any Robinhood Chain wallet's 90-day trading profile — FIFO cost-basis PnL,
+   * per-token breakdown, recent trades, and a reputation block (tracked KOL,
+   * known deployer + tier, alpha-ranked, dump-cluster membership, early-buyer
+   * count). Tier: **PRO+**. `GET /rhc/wallet/{address}`
+   * @param address Wallet EVM address (0x, 40 hex). Case-insensitive.
+   */
+  async wallet(address: string): Promise<RhcWalletProfileResponse> {
+    return this.request(`/rhc/wallet/${encodeURIComponent(address)}`);
+  }
+
+  /**
+   * Full FIFO cost-basis PnL for one RHC wallet over 90 days: realized and
+   * unrealized split, a daily realized curve, every closed position with ROI
+   * and hold time, and every open position marked to the current price. Same
+   * FIFO implementation as the Solana `/wallet/{address}/pnl`, so the two
+   * chains are directly comparable. Tier: **PRO+**.
+   * `GET /rhc/wallet/{address}/pnl`
+   * @param address Wallet EVM address (0x, 40 hex).
+   */
+  async walletPnl(address: string): Promise<RhcWalletPnlResponse> {
+    return this.request(`/rhc/wallet/${encodeURIComponent(address)}/pnl`);
+  }
+
+  /**
+   * Only what the wallet still holds, marked to the current price — the same
+   * FIFO pass as {@link walletPnl} without the curve and closed positions, for
+   * clients polling "what is this wallet in right now". Check
+   * `positions[].liquidity_basis`: `v4_virtual_ceiling` means `liquidity_usd`
+   * is a bonding-curve ceiling, not withdrawable TVL. Tier: **PRO+**.
+   * `GET /rhc/wallet/{address}/positions`
+   * @param address Wallet EVM address (0x, 40 hex).
+   */
+  async walletPositions(address: string): Promise<RhcWalletPositionsResponse> {
+    return this.request(`/rhc/wallet/${encodeURIComponent(address)}/positions`);
+  }
+
+  /**
+   * One wallet's swaps, newest first, cursor-paginated on an opaque
+   * `next_before` keyset. Distinct from `trades({ token })` — that filters the
+   * global tape by TOKEN, this filters by WALLET (a different index path).
+   * Tier: **PRO+**. `GET /rhc/wallet/{address}/trades`
+   * @param address Wallet EVM address (0x, 40 hex).
+   */
+  async walletTrades(address: string, params?: WalletTradesParams): Promise<RhcWalletTradesResponse> {
+    return this.request(
+      `/rhc/wallet/${encodeURIComponent(address)}/trades`,
+      params as Record<string, QueryValue>,
+    );
+  }
+
+  /* ── Wallet tracker (watchlist) ── */
+
+  /**
+   * Your Robinhood Chain watchlist. Quotas are **per chain** — PRO 50 /
+   * ULTRA 100 / BUSINESS 500 RHC wallets, independent of your Solana
+   * watchlist, so adopting RHC never shrinks an existing Solana list.
+   * Tier: **PRO+**. `GET /rhc/wallet-tracker/watchlist`
+   */
+  async walletTrackerList(): Promise<WalletTrackerWatchlistResponse> {
+    return this.request("/rhc/wallet-tracker/watchlist");
+  }
+
+  /**
+   * Add a wallet to your RHC watchlist. The address is stored lowercase so it
+   * matches `rhc_trades.trader_eoa` — a checksummed `0xAbC…` would join to
+   * nothing and look like a permanently silent wallet. Returns 409 if the
+   * wallet is already tracked. Tier: **PRO+**.
+   * `POST /rhc/wallet-tracker/watchlist`
+   */
+  async walletTrackerAdd(params: WalletTrackerAddParams): Promise<WalletTrackerWalletResponse> {
+    return this.send("POST", "/rhc/wallet-tracker/watchlist", params);
+  }
+
+  /**
+   * Remove a wallet from your RHC watchlist. Tier: **PRO+**.
+   * `DELETE /rhc/wallet-tracker/watchlist/{address}`
+   * @param address Tracked wallet EVM address.
+   */
+  async walletTrackerRemove(address: string): Promise<WalletTrackerRemovedResponse> {
+    return this.send("DELETE", `/rhc/wallet-tracker/watchlist/${encodeURIComponent(address)}`);
+  }
+
+  /**
+   * Relabel a tracked wallet. Tier: **PRO+**.
+   * `PATCH /rhc/wallet-tracker/watchlist/{address}`
+   * @param address Tracked wallet EVM address.
+   * @param label New label — pass `null` to clear it.
+   */
+  async walletTrackerRelabel(address: string, label: string | null): Promise<WalletTrackerWalletResponse> {
+    return this.send("PATCH", `/rhc/wallet-tracker/watchlist/${encodeURIComponent(address)}`, { label });
+  }
+
+  /**
+   * Every trade by every wallet on your RHC watchlist, newest first, each row
+   * labelled with its watchlist label. The cursor is an opaque keyset
+   * (`next_before`) matching the rest of the RHC tree, not the Solana
+   * tracker's integer epoch. A `wallet` filter must already be tracked.
+   * Tier: **PRO+**. `GET /rhc/wallet-tracker/trades`
+   */
+  async walletTrackerTrades(params?: WalletTrackerTradesParams): Promise<WalletTrackerTradesResponse> {
+    return this.request("/rhc/wallet-tracker/trades", params as Record<string, QueryValue>);
+  }
+
+  /**
+   * Per-wallet buy/sell/volume rollup across your tracked RHC wallets. Sourced
+   * from `rhc_trades` directly, not from a per-subscriber capture log — on RHC
+   * every swap is already recorded, so adding a wallet gives you its history
+   * immediately rather than only from the moment you tracked it.
+   * Tier: **PRO+**. `GET /rhc/wallet-tracker/summary`
+   */
+  async walletTrackerSummary(params?: WalletTrackerSummaryParams): Promise<WalletTrackerSummaryResponse> {
+    return this.request("/rhc/wallet-tracker/summary", params as Record<string, QueryValue>);
   }
 
   /* ── Rule engine: copy-trade ── */
