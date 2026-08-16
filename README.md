@@ -13,7 +13,9 @@ Robinhood Chain is an Arbitrum Orbit L2. This SDK gives you the same intel you g
 
 RHC coverage is **bundled into every tier at no extra cost** — same API key, same base URL. Get a free key (200 req/day, no card) at [madeonsol.com/pricing](https://madeonsol.com/pricing).
 
-> **Key-mode only.** This package authenticates with an `msk_` Bearer API key and calls the keyed Robinhood Chain v1 routes listed below. A keyless x402 pay-per-call rail for Robinhood Chain **does** exist — a deliberately narrow 6-endpoint subset with dual-accept payment (USDG on Robinhood Chain, or USDC on Solana), discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402) — but the EVM signing path is **not** bundled in this SDK yet; agents pay it directly from the self-describing 402 challenge. For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+> **Two auth modes.** **Key mode** — an `msk_` Bearer API key calls every Robinhood Chain v1 route below (49 methods, all tiers). **Keyless x402 mode** (since 0.7.0) — pass an EVM `privateKey` instead and the client pays per call in **USDG on Robinhood Chain** on the 10-endpoint x402 rail (from $0.04/call, no signup, wallet needs USDG but no ETH — our facilitator relays gas). It handles the 402 → sign EIP-3009 `transferWithAuthorization` → retry flow itself; the rail is discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402). For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+
+> **New in 0.7.0 — keyless x402 mode.** `createKeylessClient("0x…")` / `new RobinhoodChainX402({ privateKey })`: any EVM wallet holding USDG on chain 4663 can call `kolFeed`, `kolHotTokens`, `kolLeaderboard`, `token`, `tokenBuyerQuality`, `tokenKolConsensus`, `tokenRisk`, `tokenHolders`, `walletPnl` and `deployerAlerts` with no API key. The signature is EIP-712 over the USDG domain `{ Global Dollar, 1, 4663 }`, one payment attempt per call, `client.lastPayment` exposes the on-chain settlement (`transaction`, `payer`). Requires the optional peer dependency `viem` (`npm i viem`); key mode still has zero runtime deps. Calling any other method on a keyless client throws `KeylessNotAvailableError` — it names the rail, it does not silently downgrade. Also new on the server this release: `/rhc/equities` (beacon-verified tokenized stocks/ETFs), `/rhc/tokens?sort=newest&since=`, `/rhc/lp-events` — key-mode bindings for those follow in the next minor.
 
 > **New in 0.6.0 — wallet intelligence.** Ten new operations covering the Robinhood Chain wallet surface, which had no SDK binding at all until now: `wallet()` (90-day profile with reputation flags), `walletPnl()` (FIFO PnL with daily curve, closed and open positions), `walletPositions()` (open book marked to market), `walletTrades()` (per-wallet keyset-paginated tape), plus the watchlist — `walletTrackerList()`, `walletTrackerAdd()`, `walletTrackerRemove()`, `walletTrackerRelabel()`, `walletTrackerTrades()` and `walletTrackerSummary()`. Everything is **ETH**-denominated, and cost basis is FIFO over a rolling 90-day window — `cost_basis_observable_from` names the date the window opens, so a position opened before it reads as a sell with no matching buy. The profile / PnL / positions trio shares ONE snapshot cache server-side, so calling all three on an address costs roughly one computation rather than three; `cache_hit` says which call paid for it. Watchlist quotas are **per chain** (PRO 50 / ULTRA 100 / BUSINESS 500 RHC wallets), independent of your Solana list. Dependency ranges are now bounded to the versions actually tested (`@x402/*` `^2.x`, `@solana/kit` `^5.5.1`) instead of open-ended `>=0.0.1`, and the lazily-imported x402 peers are marked optional — a keyed install no longer pulls the whole Solana stack.
 
@@ -21,9 +23,11 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 ```bash
 npm install robinhood-chain-x402
+# keyless x402 mode additionally needs viem:
+npm install viem
 ```
 
-> Zero required runtime dependencies. The live stream will use the optional [`ws`](https://www.npmjs.com/package/ws) package on Node when present (recommended on Node ≥ 22 for a clean process exit); the browser uses the native `WebSocket`.
+> Zero required runtime dependencies in key mode. The live stream will use the optional [`ws`](https://www.npmjs.com/package/ws) package on Node when present (recommended on Node ≥ 22 for a clean process exit); the browser uses the native `WebSocket`.
 
 ## Quick start (10 seconds)
 
@@ -48,7 +52,25 @@ const client = new RobinhoodChainX402({
 });
 ```
 
-## Endpoints — all 41 Robinhood Chain routes
+### Keyless x402 mode — pay per call in USDG, no API key
+
+```ts
+import { createKeylessClient } from "robinhood-chain-x402";
+
+// An EVM wallet that holds USDG on Robinhood Chain (chain 4663). No ETH needed.
+// Read the key from the environment — never hard-code it.
+const agent = createKeylessClient(process.env.RHC_PAYER_KEY!);
+
+const risk = await agent.tokenRisk("0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"); // NVDA, $0.02
+console.log(risk.score, risk.sellability, agent.lastPayment?.transaction); // settlement tx on Robinhood Chain
+
+// Keyless rail = 10 endpoints; anything else throws KeylessNotAvailableError:
+console.log(agent.constructor.KEYLESS_ENDPOINTS);
+```
+
+How it works: the first request gets a `402` with `accepts[]`; the client picks the `eip155:4663` leg, signs an EIP-3009 `transferWithAuthorization` (EIP-712 domain `{ name: "Global Dollar", version: "1", chainId: 4663 }`, 5-minute validity, random 32-byte nonce) with `viem`, and retries with `PAYMENT-SIGNATURE`. Our facilitator verifies balance + nonce and settles on-chain (`transferWithAuthorization`, gas paid by us); the `PAYMENT-RESPONSE` header comes back decoded on `client.lastPayment`. Prices: from **$0.04** on the USDG leg (the relayer's gas floor); the same endpoints also accept USDC on Solana via [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+
+## Endpoints — all 52 Robinhood Chain routes
 
 Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everything is a GET except the four rule engines at the bottom, which are full CRUD.
 
@@ -91,6 +113,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 |---|---|---|---|
 | `deployerLeaderboard(params?)` | `/api/v1/rhc/deployer-hunter/leaderboard` | BASIC | 99k+ deployers ranked by reputation — `graduation_rate` ($40K+ peak MC), `runner_rate` ($100K+) |
 | `deployer(address)` | `/api/v1/rhc/deployer-hunter/{address}` | BASIC | Single deployer profile + 50 most recent tokens (unknown wallets → `is_deployer: false`) |
+| `deployerAlerts(params?)` | `/api/v1/rhc/deployer-hunter/alerts` | BASIC · keyless $0.01 | Launch alerts from tracked (graded) deployers — tier, lifetime bond rate, MC at alert; `since` = polling cursor (feed back `next_since`) |
 | `alphaWallets(params?)` | `/api/v1/rhc/alpha-wallets` | PRO+ | Smart-money wallets ranked by realized performance — `net_eth`, `win_rate`, `memecoin_share`, `likely_bot` |
 
 ### Rule engines — push, not polling

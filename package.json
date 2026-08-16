@@ -1,7 +1,7 @@
 {
   "name": "robinhood-chain-x402",
-  "version": "0.6.0",
-  "description": "TypeScript SDK for the MadeOnSol Robinhood Chain (chain id 4663) API — EVM-native KOL trades, the DEX trade tape, token discovery/bundles/candles, deployer reputation, smart-money wallets, and push rule engines (copy-trade, price alerts, KOL coordination, first touches). Key-mode (msk_ Bearer). Free tier at madeonsol.com/pricing.",
+  "version": "0.7.0",
+  "description": "TypeScript SDK for the MadeOnSol Robinhood Chain (chain id 4663) API — EVM-native KOL trades, the DEX trade tape, token discovery/bundles/candles, tokenized equities, deployer reputation, smart-money wallets, and push rule engines. Key mode (msk_ Bearer) for all 49 methods, or KEYLESS x402 mode: pay per call in USDG on Robinhood Chain from any EVM wallet (10 endpoints, from $0.04, no signup). Free tier at madeonsol.com/pricing.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -41,7 +41,11 @@
     "trading",
     "api",
     "sdk",
-    "madeonsol"
+    "madeonsol",
+    "usdg",
+    "pay-per-call",
+    "eip-3009",
+    "keyless"
   ],
   "license": "MIT",
   "homepage": "https://madeonsol.com/robinhood",
@@ -55,5 +59,13 @@
   "devDependencies": {
     "@types/node": "^20",
     "typescript": "^5"
+  },
+  "peerDependencies": {
+    "viem": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "viem": {
+      "optional": true
+    }
   }
 }

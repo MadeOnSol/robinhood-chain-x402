@@ -2,13 +2,18 @@
  * robinhood-chain-x402 — TypeScript client for the MadeOnSol Robinhood Chain
  * (chain id 4663) API.
  *
- * Robinhood Chain is an Arbitrum Orbit L2. This package is **key-mode only**:
- * it authenticates with an `msk_` Bearer API key against the Robinhood Chain
- * (/api/v1/rhc/…) endpoints. The x402 pay-per-call rail is live on Robinhood Chain too (6 keyless endpoints), but its signing path is NOT ported here
- * — see the Solana `madeonsol-x402` package for on-chain USDC micropayments.
+ * Robinhood Chain is an Arbitrum Orbit L2. Two auth modes:
  *
- * Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing —
- * RHC coverage is bundled into every tier at no extra cost.
+ *   • **Key mode** — `{ apiKey: "msk_…" }`: Bearer key against every
+ *     /api/v1/rhc/… endpoint (49 methods, all tiers, RHC bundled at no extra cost).
+ *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…" }`: an EVM
+ *     wallet holding USDG on Robinhood Chain pays per call on the x402 rail
+ *     (/api/x402/rhc/…, 10 endpoints, from $0.04). The client handles the
+ *     402 → sign EIP-3009 `transferWithAuthorization` (EIP-712, viem) → retry
+ *     flow itself; the wallet never needs ETH — our facilitator relays gas.
+ *     Needs the optional peer dependency `viem` (npm i viem).
+ *
+ * Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing.
  */
 import type {
   KolFeedParams,
@@ -28,6 +33,8 @@ import type {
   RhcKolConsensusResponse,
   RhcBuyerQualityResponse,
   RhcBundleResponse,
+  DeployerAlertsParams,
+  DeployerAlertsResponse,
   DeployerLeaderboardParams,
   DeployerLeaderboardResponse,
   RhcDeployerProfileResponse,
@@ -133,6 +140,9 @@ export type {
   RhcBundleSummary,
   RhcBundleWallet,
   RhcBundleResponse,
+  DeployerAlertsParams,
+  DeployerAlert,
+  DeployerAlertsResponse,
   DeployerLeaderboardSort,
   DeployerLeaderboardParams,
   RhcDeployer,
@@ -224,10 +234,92 @@ const DEFAULT_BASE_URL = "https://madeonsol.com";
 type QueryValue = string | number | boolean | undefined;
 
 export interface RobinhoodChainOptions {
-  /** MadeOnSol API key (`msk_...`) — get one free at https://madeonsol.com/pricing. */
-  apiKey: string;
+  /** MadeOnSol API key (`msk_...`) — get one free at https://madeonsol.com/pricing. Key mode. */
+  apiKey?: string;
+  /**
+   * Keyless x402 mode: hex private key (`0x…`) of an EVM wallet holding USDG on
+   * Robinhood Chain (chain 4663). Pays per call on the 10 keyless endpoints
+   * (see `RobinhoodChainX402.KEYLESS_ENDPOINTS`). Needs `viem` installed.
+   * Ignored when `apiKey` is also given. NEVER hard-code this — read it from
+   * an env var or a secrets manager.
+   */
+  privateKey?: string;
   /** API base URL (default: https://madeonsol.com). */
   baseUrl?: string;
+}
+
+/** Decoded PAYMENT-RESPONSE of the last paid call (x402 mode). */
+export interface X402Settlement {
+  success: boolean;
+  transaction?: string;
+  network?: string;
+  payer?: string;
+  errorReason?: string;
+}
+
+/** Thrown when a key-mode-only method is called on an x402 (keyless) client. */
+export class KeylessNotAvailableError extends Error {
+  constructor(path: string) {
+    super(
+      `${path} is not on the keyless x402 rail. Keyless endpoints: ${KEYLESS_ENDPOINTS.join(", ")}. ` +
+      "For everything else pass an apiKey (free at https://madeonsol.com/pricing).",
+    );
+    this.name = "KeylessNotAvailableError";
+  }
+}
+
+// ── x402 keyless rail (USDG on Robinhood Chain) ─────────────────────────────
+// Path templates (relative to /api/v1 or /api/x402 — same tail). Kept in sync
+// with src/lib/x402.ts X402_PRICES on the server; the server's discovery doc
+// GET https://madeonsol.com/api/x402/rhc is the source of truth.
+export const KEYLESS_ENDPOINTS = [
+  "/rhc/kol/feed",
+  "/rhc/kol/hot-tokens",
+  "/rhc/kol/leaderboard",
+  "/rhc/tokens/{address}",
+  "/rhc/tokens/{address}/buyer-quality",
+  "/rhc/tokens/{address}/kol-consensus",
+  "/rhc/tokens/{address}/risk",
+  "/rhc/tokens/{address}/holders",
+  "/rhc/wallet/{address}/pnl",
+  "/rhc/deployer-hunter/alerts",
+] as const;
+const KEYLESS_SET = new Set<string>(KEYLESS_ENDPOINTS);
+const RHC_NETWORK = "eip155:4663";
+const USDG_DOMAIN = {
+  name: "Global Dollar",
+  version: "1",
+  chainId: 4663,
+  verifyingContract: "0x5fc5360d0400a0fd4f2af552add042d716f1d168",
+} as const;
+const TRANSFER_WITH_AUTHORIZATION_TYPES = {
+  TransferWithAuthorization: [
+    { name: "from", type: "address" },
+    { name: "to", type: "address" },
+    { name: "value", type: "uint256" },
+    { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" },
+    { name: "nonce", type: "bytes32" },
+  ],
+} as const;
+const AUTH_TTL_SECONDS = 300;
+
+/** Collapse a concrete /rhc/… path to its template for the keyless lookup. */
+function keylessTemplate(path: string): string {
+  return path.split("?")[0].split("/").map((seg) => (/^0x[0-9a-fA-F]{40}$/.test(seg) ? "{address}" : seg)).join("/");
+}
+function b64(json: string): string {
+  if (typeof Buffer !== "undefined") return Buffer.from(json, "utf8").toString("base64");
+  return btoa(unescape(encodeURIComponent(json)));
+}
+function unb64(b: string): string {
+  if (typeof Buffer !== "undefined") return Buffer.from(b, "base64").toString("utf8");
+  return decodeURIComponent(escape(atob(b)));
+}
+function randomNonce(): `0x${string}` {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return ("0x" + Array.from(bytes, (x) => x.toString(16).padStart(2, "0")).join("")) as `0x${string}`;
 }
 
 /** Rate-limit headers exposed alongside every successful response. */
@@ -248,26 +340,106 @@ export interface RateLimitInfo {
 export class RobinhoodChainX402 {
   private baseUrl: string;
   private headers: Record<string, string>;
+  /** "key" (msk_ Bearer, all 49 methods) or "x402" (keyless USDG pay-per-call, 10 methods). */
+  readonly authMode: "key" | "x402";
+  private privateKey?: string;
+  // viem LocalAccount, resolved lazily on first paid call (viem is an optional peer dep).
+  private account: { address: string; signTypedData: (args: unknown) => Promise<string> } | null = null;
   /** Last response's rate-limit headers (X-RateLimit-*, X-Request-Id). */
   lastRateLimit: RateLimitInfo = { limit: null, remaining: null, reset: null, requestId: null };
+  /** x402 mode: decoded PAYMENT-RESPONSE of the last paid call (settlement tx). */
+  lastPayment: X402Settlement | null = null;
+  /** The 10 endpoints available without an API key (USDG pay-per-call). */
+  static readonly KEYLESS_ENDPOINTS = KEYLESS_ENDPOINTS;
 
   constructor(opts: RobinhoodChainOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-    if (!opts.apiKey) {
+    if (opts.apiKey) {
+      this.authMode = "key";
+      this.headers = {
+        "User-Agent": `robinhood-chain-x402/${VERSION}`,
+        Authorization: `Bearer ${opts.apiKey}`,
+      };
+    } else if (opts.privateKey) {
+      if (!/^0x[0-9a-fA-F]{64}$/.test(opts.privateKey)) {
+        throw new Error("privateKey must be a 0x-prefixed 32-byte hex EVM private key (the wallet that holds USDG on Robinhood Chain).");
+      }
+      this.authMode = "x402";
+      this.privateKey = opts.privateKey;
+      this.headers = { "User-Agent": `robinhood-chain-x402/${VERSION}` };
+    } else {
       console.error(
-        "\n[robinhood-chain-x402] Missing apiKey.\n" +
-        "  → Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing\n" +
-        "  → RHC coverage is bundled into every tier at no extra cost.\n",
+        "\n[robinhood-chain-x402] Missing apiKey or privateKey.\n" +
+        "  → apiKey: get a free API key (200 req/day, no card) at https://madeonsol.com/pricing\n" +
+        "  → privateKey: keyless x402 mode — an EVM wallet holding USDG on Robinhood Chain pays per call\n",
       );
-      throw new Error("Provide apiKey. Get a free API key at https://madeonsol.com/pricing");
+      throw new Error("Provide apiKey or privateKey. Get a free API key at https://madeonsol.com/pricing");
     }
-    this.headers = {
-      "User-Agent": `robinhood-chain-x402/${VERSION}`,
-      Authorization: `Bearer ${opts.apiKey}`,
+  }
+
+  // ── x402 keyless transport ────────────────────────────────────────────────
+
+  private async signer() {
+    if (this.account) return this.account;
+    let mod: { privateKeyToAccount: (k: `0x${string}`) => unknown };
+    try {
+      mod = (await import("viem/accounts")) as unknown as typeof mod;
+    } catch {
+      throw new Error("Keyless x402 mode needs the optional peer dependency viem: npm i viem");
+    }
+    this.account = mod.privateKeyToAccount(this.privateKey as `0x${string}`) as typeof this.account;
+    return this.account!;
+  }
+
+  /**
+   * One paid call: GET → 402 challenge → sign the USDG-on-RHC leg (EIP-3009
+   * transferWithAuthorization, EIP-712 domain "Global Dollar" v1 chain 4663) →
+   * retry with PAYMENT-SIGNATURE. Exactly one payment attempt; a second 402
+   * surfaces the facilitator's reason (insufficient USDG, expired, replayed).
+   */
+  private async requestX402<T>(path: string, params?: Record<string, QueryValue>): Promise<T> {
+    const tpl = keylessTemplate(path);
+    if (!KEYLESS_SET.has(tpl)) throw new KeylessNotAvailableError(path);
+    const url = new URL(`/api/x402${path}`, this.baseUrl);
+    if (params) for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, String(v));
+
+    const first = await fetch(url.toString(), { headers: this.headers });
+    if (first.status !== 402) {
+      // Free / already-paid / error — same handling as key mode.
+      if (!first.ok) throw new Error(`Robinhood Chain API error ${first.status}: ${await first.text().catch(() => "")}`);
+      return first.json() as Promise<T>;
+    }
+    const challenge = (await first.json().catch(() => null)) as { accepts?: Array<{ network: string; payTo: string; amount: string; asset?: string }> } | null;
+    const leg = challenge?.accepts?.find((a) => a.network === RHC_NETWORK);
+    if (!leg) throw new Error(`x402 challenge for ${path} has no USDG-on-Robinhood-Chain leg (accepts: ${JSON.stringify(challenge?.accepts?.map((a) => a.network))})`);
+
+    const account = await this.signer();
+    const now = Math.floor(Date.now() / 1000);
+    const nonce = randomNonce();
+    const to = leg.payTo;
+    const signature = await account.signTypedData({
+      domain: USDG_DOMAIN,
+      types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+      primaryType: "TransferWithAuthorization",
+      message: { from: account.address, to, value: BigInt(leg.amount), validAfter: 0n, validBefore: BigInt(now + AUTH_TTL_SECONDS), nonce },
+    });
+    const paymentPayload = {
+      x402Version: 2, scheme: "exact", network: RHC_NETWORK,
+      payload: { signature, authorization: { from: account.address, to, value: String(leg.amount), validAfter: "0", validBefore: String(now + AUTH_TTL_SECONDS), nonce } },
     };
+    const res = await fetch(url.toString(), { headers: { ...this.headers, "PAYMENT-SIGNATURE": b64(JSON.stringify(paymentPayload)) } });
+    const settle = res.headers.get("payment-response");
+    if (settle) { try { this.lastPayment = JSON.parse(unb64(settle)); } catch { this.lastPayment = null; } }
+    this.lastRateLimit = { limit: null, remaining: null, reset: null, requestId: res.headers.get("x-request-id") };
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`x402 payment for ${path} rejected (HTTP ${res.status}): ${body.slice(0, 400)}`);
+    }
+    return res.json() as Promise<T>;
   }
 
   private async request<T>(path: string, params?: Record<string, QueryValue>): Promise<T> {
+    if (this.authMode === "x402") return this.requestX402<T>(path, params);
     const url = new URL(`/api/v1${path}`, this.baseUrl);
     if (params) {
       for (const [k, v] of Object.entries(params)) {
@@ -298,6 +470,7 @@ export class RobinhoodChainX402 {
     path: string,
     body?: unknown,
   ): Promise<T> {
+    if (this.authMode === "x402") throw new KeylessNotAvailableError(path);
     const url = new URL(`/api/v1${path}`, this.baseUrl);
     const headers = body === undefined
       ? this.headers
@@ -514,6 +687,15 @@ export class RobinhoodChainX402 {
    * `graduation_rate < 0.05`). Tier: **BASIC**.
    * `GET /rhc/deployer-hunter/leaderboard`
    */
+  /**
+   * GET /rhc/deployer-hunter/alerts — launch alerts from tracked (graded)
+   * deployers: token, tier, lifetime bond rate, MC at alert. `since` is the
+   * polling cursor (feed back `next_since`). Available in keyless x402 mode ($0.01).
+   */
+  async deployerAlerts(params?: DeployerAlertsParams): Promise<DeployerAlertsResponse> {
+    return this.request("/rhc/deployer-hunter/alerts", params as Record<string, QueryValue> | undefined);
+  }
+
   async deployerLeaderboard(params?: DeployerLeaderboardParams): Promise<DeployerLeaderboardResponse> {
     return this.request("/rhc/deployer-hunter/leaderboard", params as Record<string, QueryValue>);
   }
@@ -934,4 +1116,13 @@ function numHeader(res: Response, name: string): number | null {
  */
 export function createClient(apiKey: string, baseUrl?: string): RobinhoodChainX402 {
   return new RobinhoodChainX402({ apiKey, baseUrl });
+}
+
+/**
+ * Keyless x402 client — pays per call in USDG on Robinhood Chain from the
+ * given EVM wallet (no signup, no key; wallet needs USDG, not ETH). Needs viem.
+ * @param privateKey 0x-prefixed private key of the payer wallet — read it from an env var, never hard-code.
+ */
+export function createKeylessClient(privateKey: string, baseUrl?: string): RobinhoodChainX402 {
+  return new RobinhoodChainX402({ privateKey, baseUrl });
 }

@@ -484,6 +484,46 @@ export type DeployerLeaderboardSort =
   | "best_peak_mc_usd"
   | "last_deploy_at";
 
+/** GET /rhc/deployer-hunter/alerts — tracked-deployer launch alerts (0.7.0). */
+export interface DeployerAlertsParams {
+  deployer_tier?: DeployerTier;
+  priority?: "high" | "medium";
+  alert_type?: "new_deploy" | "graduated";
+  launchpad?: string;
+  /** Minimum market cap at alert (USD). */
+  min_mc?: number;
+  /** Page size (1–500, default 50). */
+  limit?: number;
+  offset?: number;
+  /** Include alerts whose token has < $500 liquidity (default false). */
+  include_untradeable?: boolean;
+  /** Only alerts newer than this ISO8601 time — the polling cursor (pass back next_since). */
+  since?: string;
+  /** Only alerts older than this ISO8601 time — backward pagination. */
+  before?: string;
+}
+export interface DeployerAlert {
+  token_address: string;
+  token_symbol: string | null;
+  token_name: string | null;
+  deployer_address: string;
+  deployer_tier: DeployerTier | string;
+  alert_type: string;
+  priority: string;
+  market_cap_usd: number | null;
+  liquidity_usd: number | null;
+  event_at: string;
+  [key: string]: unknown;
+}
+export interface DeployerAlertsResponse {
+  chain: "robinhood";
+  alerts: DeployerAlert[];
+  limit: number;
+  offset: number;
+  next_since?: string | null;
+  [key: string]: unknown;
+}
+
 export interface DeployerLeaderboardParams {
   sort?: DeployerLeaderboardSort;
   tier?: DeployerTier;
