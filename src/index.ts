@@ -662,8 +662,12 @@ export class RobinhoodChainX402 {
    * trade-derived) and reconciled against on-chain `totalSupply()`. **Check
    * `verified` first.** Concentration excludes pools and burns from the
    * circulating denominator and reports them separately; `balance` is a raw
-   * uint256 returned as a decimal string. Tier: **PRO+** (50 rows;
-   * ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/holders`
+   * uint256 returned as a decimal string. `holder_growth.{1h,24h,7d}` adds
+   * `entered` (first Transfer at-or-after the window's `cutoff_block`),
+   * `entered_still_holding`, `exited` (pre-existing holders whose last Transfer
+   * in the window left them at zero) and `net` ≈ Δ `holder_count`; a window is
+   * null only when the chain had no ingested trades in it. Tier: **PRO+** (50
+   * rows; ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/holders`
    */
   async tokenHolders(
     address: string,
