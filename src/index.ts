@@ -5,7 +5,7 @@
  * Robinhood Chain is an Arbitrum Orbit L2. Two auth modes:
  *
  *   • **Key mode** — `{ apiKey: "msk_…" }`: Bearer key against every
- *     /api/v1/rhc/… endpoint (49 methods, all tiers, RHC bundled at no extra cost).
+ *     /api/v1/rhc/… endpoint (54 methods, all tiers, RHC bundled at no extra cost).
  *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…" }`: an EVM
  *     wallet holding USDG on Robinhood Chain pays per call on the x402 rail
  *     (/api/x402/rhc/…, 10 endpoints, from $0.04). The client handles the
@@ -25,8 +25,12 @@ import type {
   RhcKolProfileResponse,
   TradesParams,
   TradesResponse,
+  LpEventsParams,
+  LpEventsResponse,
   TokensParams,
   TokensResponse,
+  EquitiesParams,
+  EquitiesResponse,
   RhcTokenDetailResponse,
   CandlesParams,
   CandlesResponse,
@@ -118,10 +122,17 @@ export type {
   TradesParams,
   RhcTrade,
   TradesResponse,
+  LpEventsParams,
+  RhcLpEvent,
+  LpEventsResponse,
   TokensSort,
   TokensParams,
   RhcTokenListItem,
   TokensResponse,
+  EquitiesSort,
+  EquitiesParams,
+  RhcEquity,
+  EquitiesResponse,
   RhcTokenDeployer,
   RhcTokenKolActivity,
   RhcTokenDetailResponse,
@@ -340,7 +351,7 @@ export interface RateLimitInfo {
 export class RobinhoodChainX402 {
   private baseUrl: string;
   private headers: Record<string, string>;
-  /** "key" (msk_ Bearer, all 49 methods) or "x402" (keyless USDG pay-per-call, 10 methods). */
+  /** "key" (msk_ Bearer, all 54 methods) or "x402" (keyless USDG pay-per-call, 10 methods). */
   readonly authMode: "key" | "x402";
   private privateKey?: string;
   // viem LocalAccount, resolved lazily on first paid call (viem is an optional peer dep).
@@ -545,6 +556,20 @@ export class RobinhoodChainX402 {
     return this.request("/rhc/trades", params as Record<string, QueryValue>);
   }
 
+  /**
+   * Liquidity REMOVALS feed — the rug signal. Uniswap v2/v3 `Burn` and v4
+   * `ModifyLiquidity` with a negative delta on tracked pools, from our own
+   * node's log subscription. **Removals only** — adds are not persisted, so an
+   * empty page means "no removals seen", never "no liquidity activity" (the
+   * `coverage` block says `adds_persisted: false`). Amounts are raw uint256
+   * STRINGS; v4 rows carry `liquidity` only. `provider_is_token_deployer` is
+   * the classic rug tell. Cursor via `next_before`. Data since 2026-08-05.
+   * Tier: **PRO+**. Key mode only (not on the x402 rail). `GET /rhc/lp-events`
+   */
+  async lpEvents(params?: LpEventsParams): Promise<LpEventsResponse> {
+    return this.request("/rhc/lp-events", params as Record<string, QueryValue>);
+  }
+
   /* ── Token discovery + intelligence ── */
 
   /**
@@ -554,6 +579,19 @@ export class RobinhoodChainX402 {
    */
   async tokens(params?: TokensParams): Promise<TokensResponse> {
     return this.request("/rhc/tokens", params as Record<string, QueryValue>);
+  }
+
+  /**
+   * Tokenized stocks & ETFs on Robinhood Chain — every official Robinhood
+   * tokenized equity (NVDA, SPY, AAPL, …) with live price / MC / liquidity and
+   * 24h trades / ETH volume / buyer-seller split. **Identity is the issuer
+   * BEACON, never the name**: listed only if the contract is an EIP-1967 beacon
+   * proxy on Robinhood's issuer beacon, read from our own node — the 20 fake
+   * "GameStop • Robinhood Token" contracts never appear. 24h stats cached 60 s.
+   * Tier: **BASIC**. Key mode only (not on the x402 rail). `GET /rhc/equities`
+   */
+  async equities(params?: EquitiesParams): Promise<EquitiesResponse> {
+    return this.request("/rhc/equities", params as Record<string, QueryValue>);
   }
 
   /**

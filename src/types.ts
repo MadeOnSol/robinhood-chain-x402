@@ -226,6 +226,72 @@ export interface TradesResponse {
   next_before: string | null;
 }
 
+/* ── /rhc/lp-events ── */
+
+export interface LpEventsParams {
+  /** 1–200. Default 50. */
+  limit?: number;
+  /** Filter to one token address (0x, 40 hex). */
+  token?: string;
+  /** Pool address (v2/v3) or bytes32 poolId (v4). */
+  pool?: string;
+  /** Filter to one liquidity provider — the wallet that pulled (0x, 40 hex). */
+  provider?: string;
+  dex?: Dex;
+  /** Opaque cursor from `next_before` (same (block_time,id) keyset as /rhc/trades). */
+  before?: string;
+}
+
+/**
+ * One liquidity REMOVAL. Every row is `event: "remove"` — adds are not
+ * persisted. Amounts are raw uint256 integers as decimal STRINGS; v4 rows carry
+ * `liquidity` only (the pool manager emits no token amounts).
+ */
+export interface RhcLpEvent {
+  event: "remove";
+  pool: string;
+  dex: Dex;
+  fee_tier: number | null;
+  token_address: string;
+  token_symbol: string | null;
+  token_name: string | null;
+  token_decimals: number | null;
+  launchpad: string | null;
+  /** Wallet that removed liquidity. */
+  provider: string | null;
+  /** True when the provider is the token's own deployer — the classic rug shape. */
+  provider_is_token_deployer: boolean;
+  provider_deployer_tier: string | null;
+  provider_kol_name: string | null;
+  /** Raw liquidity units removed (v3/v4). uint256 as string. */
+  liquidity: string | null;
+  /** Raw token0 amount (v2/v3 only). uint256 as string. */
+  amount0: string | null;
+  /** Raw token1 amount (v2/v3 only). uint256 as string. */
+  amount1: string | null;
+  token0: string | null;
+  token1: string | null;
+  /** amount0 or amount1, whichever is the token side. */
+  token_amount_raw: string | null;
+  quote_token: string | null;
+  quote_amount_raw: string | null;
+  block_number: number;
+  /** Exact block header timestamp (ISO 8601). */
+  block_time: string;
+  tx_hash: string;
+  log_index: number;
+}
+
+export interface LpEventsResponse {
+  chain: Chain;
+  events: RhcLpEvent[];
+  count: number;
+  has_more: boolean;
+  next_before: string | null;
+  /** Honesty block: events ["remove"], adds_persisted false, note, since. */
+  coverage: { events: string[]; adds_persisted: boolean; note: string; since: string };
+}
+
 /* ── /rhc/tokens ── */
 
 export type TokensSort = "last_trade" | "market_cap" | "liquidity" | "peak_mc";
@@ -265,6 +331,67 @@ export interface TokensResponse {
   tokens: RhcTokenListItem[];
   count: number;
   sort: string;
+}
+
+/* ── /rhc/equities ── */
+
+export type EquitiesSort = "volume" | "trades" | "market_cap" | "last_trade" | "symbol";
+
+export interface EquitiesParams {
+  /** Default "volume" (24h ETH volume). */
+  sort?: EquitiesSort;
+  /** 1–300. Default 100. */
+  limit?: number;
+  /** Exact ticker, case-insensitive (NVDA). */
+  symbol?: string;
+  /** Substring of symbol or name. */
+  q?: string;
+}
+
+/**
+ * One official Robinhood tokenized equity (stock or ETF). Identity is the
+ * issuer BEACON, never the name — listed only if the contract is an EIP-1967
+ * beacon proxy on Robinhood's issuer beacon.
+ */
+export interface RhcEquity {
+  token_address: string;
+  symbol: string | null;
+  /** Underlying name with the "• Robinhood Token" suffix stripped (display only). */
+  name: string | null;
+  onchain_name: string | null;
+  asset_class: "equity";
+  /** Always true here — beacon-verified by construction. */
+  verified: boolean;
+  issuer_beacon: string | null;
+  decimals: number | null;
+  listed_at: string | null;
+  price_usd: number | null;
+  price_native: number | null;
+  market_cap_usd: number | null;
+  fdv_usd: number | null;
+  peak_mc_usd: number | null;
+  liquidity_usd: number | null;
+  liquidity_basis: string | null;
+  primary_dex: string | null;
+  primary_pool: string | null;
+  last_trade_time: string | null;
+  trades_24h: number;
+  volume_eth_24h: number;
+  buys_24h: number;
+  sells_24h: number;
+  buyers_24h: number;
+  sellers_24h: number;
+}
+
+export interface EquitiesResponse {
+  chain: Chain;
+  equities: RhcEquity[];
+  count: number;
+  total_equities: number;
+  sort: string;
+  identity: { method: string; issuer_beacon: string; note: string };
+  stats_window: "24h";
+  stats_as_of: string;
 }
 
 /* ── /rhc/tokens/{address} ── */

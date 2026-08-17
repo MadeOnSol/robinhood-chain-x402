@@ -13,7 +13,9 @@ Robinhood Chain is an Arbitrum Orbit L2. This SDK gives you the same intel you g
 
 RHC coverage is **bundled into every tier at no extra cost** — same API key, same base URL. Get a free key (200 req/day, no card) at [madeonsol.com/pricing](https://madeonsol.com/pricing).
 
-> **Two auth modes.** **Key mode** — an `msk_` Bearer API key calls every Robinhood Chain v1 route below (49 methods, all tiers). **Keyless x402 mode** (since 0.7.0) — pass an EVM `privateKey` instead and the client pays per call in **USDG on Robinhood Chain** on the 10-endpoint x402 rail (from $0.04/call, no signup, wallet needs USDG but no ETH — our facilitator relays gas). It handles the 402 → sign EIP-3009 `transferWithAuthorization` → retry flow itself; the rail is discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402). For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+> **Two auth modes.** **Key mode** — an `msk_` Bearer API key calls every Robinhood Chain v1 route below (54 methods, all tiers). **Keyless x402 mode** (since 0.7.0) — pass an EVM `privateKey` instead and the client pays per call in **USDG on Robinhood Chain** on the 10-endpoint x402 rail (from $0.04/call, no signup, wallet needs USDG but no ETH — our facilitator relays gas). It handles the 402 → sign EIP-3009 `transferWithAuthorization` → retry flow itself; the rail is discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402). For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+
+> **New in 0.9.0 — tokenized equities + the rug signal (key mode).** The two routes flagged as "bindings follow" in 0.7.0 are now bound: `client.equities(params?)` → `GET /rhc/equities` (**BASIC**, typed `EquitiesResponse` / `RhcEquity`) lists every official Robinhood tokenized stock/ETF (NVDA, SPY, AAPL, …) with live price / MC / liquidity and 24h trades / ETH volume / buyer-seller split. **Identity is the issuer BEACON, never the name** — a token is listed only if its contract is an EIP-1967 beacon proxy on Robinhood's issuer beacon, read from our own node; on ship day there were 20 fake "GameStop • Robinhood Token" contracts and 8 fake NVDAs with the exact official suffix, and none appear here. `client.lpEvents(params?)` → `GET /rhc/lp-events` (**PRO+**, typed `LpEventsResponse` / `RhcLpEvent`) is the liquidity **removals** feed — Uniswap v2/v3 `Burn` + v4 `ModifyLiquidity` with a negative delta on tracked pools, each row enriched with the token, the provider wallet, `provider_is_token_deployer` (the classic rug tell) and `provider_kol_name`. Removals ONLY: adds are not persisted, so an empty page means "no removals seen", never "no liquidity activity" — the `coverage` block says `adds_persisted: false`. Amounts are raw uint256 strings; v4 rows carry `liquidity` only. Filter by `token` / `pool` / `provider` / `dex`, cursor via `next_before`. Data since 2026-08-05. Both are **key mode only** — neither is on the 10-endpoint x402 rail; a keyless client throws `KeylessNotAvailableError` for them.
 
 > **New in 0.8.0 — `holder_growth`: who arrived and who left.** `client.tokenHolders(address)` (key mode and the keyless USDG rail alike — same handler) now returns `holder_growth` on `GET /rhc/tokens/{address}/holders`: `{ "1h", "24h", "7d" }` × `{ cutoff_block, entered, entered_still_holding, exited, net }`. *entered* = addresses whose first `Transfer` of the token landed at-or-after the window's cutoff block (any current balance); *entered_still_holding* = those still non-zero; *exited* = pre-existing holders whose last movement in the window left them at zero; *net* ≈ the change in `holder_count`. Pools and burn addresses are excluded from every count. This exists because RHC balances are folded from ERC-20 Transfer logs on our own node — the fold keeps first-seen and last-moved blocks per address and retains zero-balance rows — so it is a direct read, not an estimate; the Solana census is a point-in-time ledger scan with no history and cannot answer this. A window is `null` (never 0) only when the chain had no ingested trades in it; the whole block is `null` only if the growth read failed. Sanity check from ship day: a token launched that morning showed 593 entered / 560 still holding over 24h, and `holder_count` was exactly 560.
 
@@ -72,7 +74,7 @@ console.log(agent.constructor.KEYLESS_ENDPOINTS);
 
 How it works: the first request gets a `402` with `accepts[]`; the client picks the `eip155:4663` leg, signs an EIP-3009 `transferWithAuthorization` (EIP-712 domain `{ name: "Global Dollar", version: "1", chainId: 4663 }`, 5-minute validity, random 32-byte nonce) with `viem`, and retries with `PAYMENT-SIGNATURE`. Our facilitator verifies balance + nonce and settles on-chain (`transferWithAuthorization`, gas paid by us); the `PAYMENT-RESPONSE` header comes back decoded on `client.lastPayment`. Prices: from **$0.04** on the USDG leg (the relayer's gas floor); the same endpoints also accept USDC on Solana via [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
 
-## Endpoints — all 52 Robinhood Chain routes
+## Endpoints — all 54 Robinhood Chain routes
 
 Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everything is a GET except the four rule engines at the bottom, which are full CRUD.
 
@@ -90,6 +92,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 | Method | Route | Tier | Description |
 |---|---|---|---|
 | `trades(params?)` | `/api/v1/rhc/trades` | PRO+ | Every Uniswap v2/v3/v4 swap with the effective `trader_eoa`, gas/ordering for MEV, and KOL/deployer flags |
+| `lpEvents(params?)` | `/api/v1/rhc/lp-events` | PRO+ | Liquidity **removals** feed — v2/v3 `Burn` + v4 negative `ModifyLiquidity` on tracked pools; `provider_is_token_deployer` = rug tell. Removals only (`coverage.adds_persisted: false`); raw uint256 string amounts; filters `token` / `pool` / `provider` / `dex`, cursor `next_before` |
 
 > **`trader_eoa` is the effective trading account**, not simply `tx.from`. On an ordinary transaction it *is* `tx.from`; when the trade was bundled through ERC-4337 it is the userOp sender (`UserOperationEvent`), never the bundler that relayed it. It is still an EOA either way — on Robinhood Chain a userOp sender is a normal EOA carrying an EIP-7702 delegation. Use `trader` only for the swap-log recipient (the router on aggregated swaps).
 
@@ -98,6 +101,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 | Method | Route | Tier | Description |
 |---|---|---|---|
 | `tokens(params?)` | `/api/v1/rhc/tokens` | PRO+ | Live-priced token discovery — MC, liquidity, peak MC + drawdown, launchpad, deployer tier |
+| `equities(params?)` | `/api/v1/rhc/equities` | BASIC | Every official Robinhood tokenized stock/ETF — identity = issuer **beacon** (never the name), live price / MC / liquidity, 24h trades / ETH volume / buyers vs sellers. `sort` volume\|trades\|market_cap\|last_trade\|symbol, `symbol` exact, `q` substring, `limit` ≤ 300 |
 | `token(address)` | `/api/v1/rhc/tokens/{address}` | BASIC | Full token snapshot — price/MC/FDV, graduation, deployer block, KOL activity, pools |
 | `tokenCandles(address, params?)` | `/api/v1/rhc/tokens/{address}/candles` | PRO+ | 1-minute OHLC candles — price + MC OHLC, close liquidity, volume with buy/sell split |
 | `tokenKolConsensus(address)` | `/api/v1/rhc/tokens/{address}/kol-consensus` | PRO+ | KOL positioning — buyers vs sellers, exit rate, `net_flow_eth`, median entry MC (ULTRA adds wallet lists) |
@@ -183,6 +187,14 @@ const { deployers } = await client.deployerLeaderboard({ sort: "runner_rate", ti
 // Is this token's early cohort a launch bundle that's still holding?
 const { bundle } = await client.tokenBundle("0xToken...");
 console.log(bundle.bundle_kind, bundle.held_pct_of_supply);
+
+// Tokenized equities ranked by 24h ETH volume — beacon-verified, so no fake NVDA/GameStop contracts
+const { equities, identity } = await client.equities({ sort: "volume", limit: 20 });
+console.log(identity.method, equities[0]?.symbol, equities[0]?.price_usd, equities[0]?.trades_24h);
+
+// Rug watch — liquidity REMOVALS for one token (adds are never persisted; coverage.adds_persisted is false)
+const { events, next_before } = await client.lpEvents({ token: "0xToken...", limit: 50 });
+for (const ev of events) if (ev.provider_is_token_deployer) console.warn("deployer pulled LP:", ev.tx_hash, ev.dex);
 
 // Smart-money memecoin traders only, biggest net ETH first
 const { wallets } = await client.alphaWallets({ classification: "smart_money", min_memecoin_share: 0.7 });
