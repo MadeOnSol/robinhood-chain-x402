@@ -2,8 +2,11 @@
  * Real-time Robinhood Chain WebSocket streaming client.
  *
  * Wraps the connect → token → subscribe → event loop with auto-reconnect,
- * 24h-token auto-refresh, heartbeat liveness, and typed events, so consumers
- * never hand-roll connection management. Obtain one via `client.stream()`.
+ * heartbeat liveness, and typed events, so consumers never hand-roll
+ * connection management. The stream token is fetched on every (re)connect;
+ * stream tokens never expire (since 2026-08-27), so there is no refresh
+ * timer — a `4001` close means the token was rotated or the subscription
+ * lapsed, and the reconnect simply mints again. Obtain one via `client.stream()`.
  *
  * Channels are RHC-scoped: `rhc:kol_trades` (the KOL tape), `rhc:dex_trades`
  * (the full DEX firehose, ULTRA+), and the four rule-engine channels
@@ -80,7 +83,10 @@ export interface StreamEvent<T = unknown> {
 }
 
 export interface StreamClientOptions {
-  /** Returns a fresh 24h stream token (the SDK wires this to getStreamToken()). */
+  /**
+   * Returns the stream token (the SDK wires this to getStreamToken()). Called
+   * on every (re)connect; tokens never expire, so it is never called on a timer.
+   */
   getToken: () => Promise<StreamToken>;
   /** Reconnect automatically on drop (default: true). */
   autoReconnect?: boolean;

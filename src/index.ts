@@ -1115,10 +1115,29 @@ export class RobinhoodChainX402 {
 
   /* ── Streaming ── */
 
-  /** Generate a 24h WebSocket streaming token (PRO/ULTRA). */
-  async getStreamToken(): Promise<StreamToken> {
+  /**
+   * Get your WebSocket streaming token (PRO/ULTRA). Stream tokens **never
+   * expire** (since 2026-08-27): every call returns the same token and nothing
+   * needs refreshing — `expires_at` / `next_refresh_at` are always `null`.
+   * A token only stops working when the subscription lapses or you pass
+   * `{ rotate: true }`, which replaces it (the previous value keeps working
+   * for 60 s; the response then carries `rotated: true`). The server never
+   * rotates on its own, and a `4001` close means "mint again", never a timer.
+   * Authenticate the handshake with `Authorization: Bearer <token>` (`?token=`
+   * still works and is masked in access logs); RHC channels ride the same
+   * socket and token as Solana. `POST /api/v1/stream/token`
+   * @param opts.rotate Replace the current token instead of returning it.
+   */
+  async getStreamToken(opts?: { rotate?: boolean }): Promise<StreamToken> {
     const url = new URL("/api/v1/stream/token", this.baseUrl);
-    const res = await fetch(url.toString(), { method: "POST", headers: this.headers });
+    const init: RequestInit = opts?.rotate
+      ? {
+          method: "POST",
+          headers: { ...this.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({ rotate: true }),
+        }
+      : { method: "POST", headers: this.headers };
+    const res = await fetch(url.toString(), init);
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Robinhood Chain API error ${res.status}: ${body}`);
@@ -1127,9 +1146,10 @@ export class RobinhoodChainX402 {
   }
 
   /**
-   * Open a managed real-time Robinhood Chain WebSocket stream. Handles token
-   * fetch + refresh, auto-reconnect with backoff, heartbeat liveness, and typed
-   * events for you. Channels: `rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), plus
+   * Open a managed real-time Robinhood Chain WebSocket stream. Handles the
+   * token fetch on every (re)connect (stream tokens never expire, so there is
+   * no refresh timer), auto-reconnect with backoff, heartbeat liveness, and
+   * typed events for you. Channels: `rhc:kol_trades`, `rhc:dex_trades` (ULTRA+), plus
    * the four rule-engine channels (`rhc:copytrade:signals`,
    * `rhc:price_alert:events`, `rhc:kol:coordination`, `rhc:kol:first_touches`).
    * Listen on `"warning"` to catch server `channels_rejected` frames.

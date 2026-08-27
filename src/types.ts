@@ -1537,5 +1537,18 @@ export interface StreamToken {
   ws_url: string;
   /** Present on some tiers — the all-DEX firehose URL. */
   dex_ws_url?: string;
-  expires_at?: string;
+  /**
+   * Always `null` since 2026-08-27 — stream tokens never expire. Kept for
+   * wire compatibility only; never schedule a refresh from it.
+   */
+  expires_at: string | null;
+  /** Always `null` since 2026-08-27 (see `expires_at`). */
+  next_refresh_at?: string | null;
+  /**
+   * `true` when this call replaced the previous token (`{ rotate: true }`);
+   * the previous value keeps working for 60 s.
+   */
+  rotated?: boolean;
+  /** Human-readable lifetime statement from the server (e.g. `"never expires"`). */
+  lifetime?: string;
 }
