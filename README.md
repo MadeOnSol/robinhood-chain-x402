@@ -84,7 +84,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 
 | Method | Route | Tier | Description |
 |---|---|---|---|
-| `kolFeed(params?)` | `/api/v1/rhc/kol/feed` | BASIC | Real-time KOL trade feed — every buy/sell from tracked KOLs' verified EVM wallets, enriched with MC/peak and `mc_multiple_since_trade` |
+| `kolFeed(params?)` | `/api/v1/rhc/kol/feed` | BASIC | KOL trade feed — every buy/sell from tracked KOLs' verified EVM wallets, enriched with MC/peak and `mc_multiple_since_trade` (real-time on PRO+ and x402; 5-min delay on free keys) |
 | `kolLeaderboard(params?)` | `/api/v1/rhc/kol/leaderboard` | BASIC | KOLs ranked by trade count then net ETH flow over `24h`/`7d`/`30d` |
 | `kolHotTokens(params?)` | `/api/v1/rhc/kol/hot-tokens` | BASIC | Consensus tokens bought by 2+ distinct KOLs in the window |
 | `kol(wallet)` | `/api/v1/rhc/kol/{wallet}` | BASIC | Single KOL profile — aggregate stats + 50 most recent trades |
