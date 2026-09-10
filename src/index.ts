@@ -542,6 +542,23 @@ export class RobinhoodChainX402 {
     return this.request(`/rhc/kol/${encodeURIComponent(wallet)}`);
   }
 
+  /**
+   * KOL coordination clustering — tokens multiple tracked KOLs bought in the
+   * same window. Tier: BASIC. `GET /rhc/kol/coordination`. Added 2026-09-10
+   * (previously covered on MCP/ElizaOS/SAK but not this client).
+   */
+  async kolCoordination(params?: { period?: "1h" | "6h" | "24h" | "7d"; min_kols?: number; limit?: number; min_mc_usd?: number; max_mc_usd?: number }): Promise<unknown> {
+    return this.request("/rhc/kol/coordination", params as Record<string, QueryValue>);
+  }
+
+  /**
+   * The globally earliest buy by any tracked KOL per token — the discovery
+   * signal. Tier: BASIC. `GET /rhc/kol/first-touches`. Added 2026-09-10.
+   */
+  async kolFirstTouches(params?: { limit?: number; since?: string; before?: string; min_eth?: number; token_age_max_min?: number; launchpad?: string; min_mc_usd?: number; max_mc_usd?: number }): Promise<unknown> {
+    return this.request("/rhc/kol/first-touches", params as Record<string, QueryValue>);
+  }
+
   /* ── DEX trade tape ── */
 
   /**
@@ -740,6 +757,56 @@ export class RobinhoodChainX402 {
 
   async deployerLeaderboard(params?: DeployerLeaderboardParams): Promise<DeployerLeaderboardResponse> {
     return this.request("/rhc/deployer-hunter/leaderboard", params as Record<string, QueryValue>);
+  }
+
+  // ── 2026-09-10 gap-audit fix: this client covered the leaderboard/profile
+  // reads but never got the rest of the deployer-hunter surface, the two
+  // batch-lookup POSTs, or KOL coordination/first-touches — all already
+  // present on MCP/ElizaOS/SAK. Ported from plugin-robinhood-chain/client.ts.
+
+  /** Deployer reputation trend (rising/falling/stable). Tier: BASIC. `GET /rhc/deployer-hunter/{address}/trajectory` */
+  async deployerTrajectory(address: string): Promise<unknown> {
+    return this.request(`/rhc/deployer-hunter/${encodeURIComponent(address)}/trajectory`);
+  }
+
+  /** Full token-deploy history for a deployer. Tier: BASIC. `GET /rhc/deployer-hunter/{address}/tokens` */
+  async deployerTokens(address: string, params?: { limit?: number; offset?: number; sort?: "first_seen_at" | "peak_mc_usd" }): Promise<unknown> {
+    return this.request(`/rhc/deployer-hunter/${encodeURIComponent(address)}/tokens`, params as Record<string, QueryValue>);
+  }
+
+  /** Deployer token-launch history, paginated. Tier: PRO+. `GET /rhc/deployer-hunter/{address}/history` */
+  async deployerHistory(address: string, params?: { limit?: number; offset?: number }): Promise<unknown> {
+    return this.request(`/rhc/deployer-hunter/${encodeURIComponent(address)}/history`, params as Record<string, QueryValue>);
+  }
+
+  /** Top recent launches from good/elite deployers. Tier: BASIC. `GET /rhc/deployer-hunter/best-tokens` */
+  async deployerBestTokens(params?: { period?: "24h" | "7d" | "30d" | "all"; limit?: number }): Promise<unknown> {
+    return this.request("/rhc/deployer-hunter/best-tokens", params as Record<string, QueryValue>);
+  }
+
+  /** Chain-wide deployer census. Tier: BASIC. `GET /rhc/deployer-hunter/stats` */
+  async deployerStats(): Promise<unknown> {
+    return this.request("/rhc/deployer-hunter/stats");
+  }
+
+  /** Recent graduations (defined purely by peak MC, no bonding-curve milestone on RHC). Tier: BASIC. `GET /rhc/deployer-hunter/recent-bonds` */
+  async recentBonds(params?: { deployer_tier?: "elite" | "good" | "neutral" | "spammer"; min_peak?: number; limit?: number }): Promise<unknown> {
+    return this.request("/rhc/deployer-hunter/recent-bonds", params as Record<string, QueryValue>);
+  }
+
+  /** Up to 50 tokens in one call. Tier: BASIC. `POST /rhc/token/batch`. Key-mode only (write-shaped request). */
+  async tokenBatch(addresses: string[]): Promise<unknown> {
+    return this.send("POST", "/rhc/token/batch", { addresses });
+  }
+
+  /** Buyer-quality score for up to 50 tokens. Tier: BASIC. `POST /rhc/tokens/batch/buyer-quality`. Key-mode only. */
+  async tokenBatchBuyerQuality(addresses: string[]): Promise<unknown> {
+    return this.send("POST", "/rhc/tokens/batch/buyer-quality", { addresses });
+  }
+
+  /** First buyers of a token, ranked, with still-holding status. Tier: PRO+. `GET /rhc/tokens/{address}/early-buyers` */
+  async tokenEarlyBuyers(address: string, params?: { limit?: number }): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/early-buyers`, params as Record<string, QueryValue>);
   }
 
   /**
