@@ -292,6 +292,204 @@ export interface LpEventsResponse {
   coverage: { events: string[]; adds_persisted: boolean; note: string; since: string };
 }
 
+/* ── /rhc/tokens/locks · /rhc/tokens/{address}/locks · /rhc/tokens/unlocks ── */
+
+export type RhcLockFamily =
+  | "pinklock" | "teamfinance" | "teamfinance-nft" | "uncx-v2-lp" | "uncx-v3-lp" | "uncx-vesting" | "vesting-fork"
+  | "goplus" | "titan" | "titan-position" | "titan-vesting" | "hoodlock" | "hoodlock-vesting" | "sablier";
+export type RhcLockKind = "lock" | "vesting";
+export type RhcLockSubject = "token" | "lp";
+export type RhcLockStatus = "active" | "completed";
+
+export interface TokenLocksParams {
+  /** 1–100. Default 50. */
+  limit?: number;
+  /** ISO instant — only locks created after it (poll cursor = pagination.next_since). */
+  since?: string;
+  /** ISO instant — only locks created before it (page back = pagination.next_before). */
+  before?: string;
+  token?: string;
+  /** Depositor / creator wallet. */
+  sender?: string;
+  /** Beneficiary wallet. */
+  recipient?: string;
+  /** Locker contract address. */
+  locker?: string;
+  family?: RhcLockFamily;
+  kind?: RhcLockKind;
+  /** token (default) excludes LP locks; lp = only LP locks; all = both. */
+  subject?: RhcLockSubject | "all";
+  status?: RhcLockStatus;
+  /** Post-filter on the deposited amount in USD. */
+  min_usd?: number;
+  /** Post-filter on the deposited amount as % of supply. */
+  min_pct_of_supply?: number;
+}
+
+export interface RhcLockNextUnlock {
+  at: string;
+  kind: "cliff" | "final" | "tranche";
+  amount_raw: string;
+  amount: number | null;
+  amount_usd: number | null;
+}
+
+/**
+ * One lock / vesting contract. Amounts are raw base units as decimal STRINGS;
+ * ui / usd / pct are null when decimals or price are unknown. `withdrawn_*`
+ * is ALWAYS null — withdrawals are not tracked on RHC (create-only tape).
+ */
+export interface RhcTokenLock {
+  /** `<tx_hash>:<log_index>` — the row identity. */
+  lock_id: string;
+  locker: string;
+  locker_name: string | null;
+  family: RhcLockFamily;
+  family_name: string;
+  locker_lock_id: string | null;
+  kind: RhcLockKind;
+  subject: RhcLockSubject;
+  status: RhcLockStatus;
+  token_address: string;
+  /** Only on subject=lp. */
+  lp: { kind: "v2_pair" | "v3_position" | "v4_position" | null; pool: string | null; token0: string | null; token1: string | null; token_id: string | null } | null;
+  /** Depositor / creator — the dev-lock comparison key. */
+  sender: string;
+  recipient: string | null;
+  tx_sender: string | null;
+  name: string | null;
+  amount_raw: string | null;
+  amount: number | null;
+  amount_usd: number | null;
+  amount_pct_of_supply: number | null;
+  amount_unit: string | null;
+  locked_raw: string | null;
+  locked: number | null;
+  locked_usd: number | null;
+  locked_pct_of_supply: number | null;
+  unlocked_raw: string | null;
+  unlocked: number | null;
+  withdrawn_raw: null;
+  withdrawn: null;
+  start_at: string | null;
+  cliff_at: string | null;
+  end_at: string | null;
+  cliff_amount_raw: string | null;
+  cliff_amount: number | null;
+  continuous: boolean;
+  perpetual: boolean;
+  schedule?: Array<{ release_at: string; amount_raw: string; amount: number | null }>;
+  next_unlock: RhcLockNextUnlock | null;
+  cancelable: boolean | null;
+  cancelable_by_sender: boolean | null;
+  transferable: boolean | null;
+  created_at: string;
+  created_at_estimated: false;
+  block_number: number;
+  block_time: string;
+  tx_hash: string;
+  log_index: number;
+  layout_verified: boolean;
+  token?: { symbol: string | null; name: string | null; decimals: number | null; price_usd: number | null; market_cap_usd: number | null; liquidity_usd: number | null };
+}
+
+export interface RhcLockCoverage {
+  families: readonly string[];
+  withdrawals_tracked: false;
+  cancels_tracked: false;
+  lp_locks: string;
+  note: string;
+}
+
+export interface TokenLocksResponse {
+  chain: Chain;
+  locks: RhcTokenLock[];
+  pagination: { limit: number; count: number; has_more: boolean; next_since: string | null; next_before: string | null };
+  stream: { channel: string; note?: string; [k: string]: unknown };
+  coverage: RhcLockCoverage;
+  meta: { families: readonly string[]; note: string };
+}
+
+export interface TokenLockSummaryParams {
+  status?: RhcLockStatus;
+  family?: RhcLockFamily;
+  /** Default all. */
+  subject?: RhcLockSubject | "all";
+  /** 1–500. Default 200 (the summary always covers every row). */
+  limit?: number;
+}
+
+export interface TokenLockSummaryResponse {
+  chain: Chain;
+  token_address: string;
+  token: { symbol: string | null; name: string | null; decimals: number | null; price_usd: number | null; supply: number | null; market_cap_usd: number | null; liquidity_usd: number | null; facts_resolved: boolean };
+  summary: {
+    lock_count: number; complete: boolean; rows_considered: number;
+    token_lock_count: number; lp_lock_count: number; lp_lock_active_count: number; active_count: number;
+    by_family: Record<string, number>; by_kind: Record<string, number>;
+    distinct_lockers: number; distinct_locker_contracts: number;
+    locked_raw: string; locked: number | null; locked_usd: number | null; locked_pct_of_supply: number | null;
+    deposited_raw: string; deposited: number | null; deposited_usd: number | null;
+    unlocking_7d_raw: string; unlocking_7d: number | null; unlocking_7d_usd: number | null; unlocking_7d_pct_of_supply: number | null;
+    unlocking_30d_raw: string; unlocking_30d: number | null; unlocking_30d_usd: number | null; unlocking_30d_pct_of_supply: number | null;
+    next_unlock: (RhcLockNextUnlock & { lock_id?: string }) | null;
+    active_cancelable_by_sender: number;
+  };
+  locks: RhcTokenLock[];
+  coverage: RhcLockCoverage;
+  meta: { families: readonly string[]; note: string; source: string };
+}
+
+export type UnlocksWithin = "1h" | "6h" | "24h" | "3d" | "7d" | "14d" | "30d" | "90d";
+
+export interface TokenUnlocksParams {
+  /** Default 7d. */
+  within?: UnlocksWithin;
+  token?: string;
+  family?: RhcLockFamily;
+  kind?: RhcLockKind;
+  /** On the next-event amount. */
+  min_usd?: number;
+  /** On the next-event amount. */
+  min_pct_of_supply?: number;
+  /** Default soonest. */
+  sort?: "soonest" | "largest_usd" | "largest_pct";
+  /** 1–200. Default 50. */
+  limit?: number;
+}
+
+export interface RhcTokenUnlock {
+  unlock_at: string;
+  in_seconds: number;
+  event: "cliff" | "final" | "tranche";
+  amount_raw: string;
+  amount: number | null;
+  amount_usd: number | null;
+  amount_pct_of_supply: number | null;
+  window_amount_raw: string;
+  window_amount: number | null;
+  window_amount_usd: number | null;
+  window_amount_pct_of_supply: number | null;
+  token_address: string;
+  token: { symbol: string | null; name: string | null; decimals: number | null; price_usd: number | null; market_cap_usd: number | null };
+  lock: {
+    lock_id: string; locker: string; locker_name: string | null; family: RhcLockFamily; kind: RhcLockKind; name: string | null;
+    sender: string; recipient: string | null;
+    amount_raw: string; amount: number | null; amount_usd: number | null;
+    locked_raw: string; locked: number | null; locked_usd: number | null;
+    cliff_at: string | null; end_at: string | null; cancelable_by_sender: boolean | null; tx_hash: string;
+  };
+}
+
+export interface TokenUnlocksResponse {
+  chain: Chain;
+  window: { within: UnlocksWithin; from: string; to: string };
+  unlocks: RhcTokenUnlock[];
+  pagination: { limit: number; count: number; total_in_window: number; has_more: boolean; candidates_capped: boolean };
+  coverage: RhcLockCoverage;
+  meta: { families: readonly string[]; note: string; source: string };
+}
+
 /* ── /rhc/tokens ── */
 
 export type TokensSort = "last_trade" | "market_cap" | "liquidity" | "peak_mc";

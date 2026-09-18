@@ -27,6 +27,12 @@ import type {
   TradesResponse,
   LpEventsParams,
   LpEventsResponse,
+  TokenLocksParams,
+  TokenLocksResponse,
+  TokenLockSummaryParams,
+  TokenLockSummaryResponse,
+  TokenUnlocksParams,
+  TokenUnlocksResponse,
   TokensParams,
   TokensResponse,
   EquitiesParams,
@@ -125,6 +131,17 @@ export type {
   LpEventsParams,
   RhcLpEvent,
   LpEventsResponse,
+  TokenLocksParams,
+  TokenLocksResponse,
+  TokenLockSummaryParams,
+  TokenLockSummaryResponse,
+  TokenUnlocksParams,
+  TokenUnlocksResponse,
+  RhcTokenLock,
+  RhcTokenUnlock,
+  RhcLockCoverage,
+  RhcLockFamily,
+  RhcLockNextUnlock,
   TokensSort,
   TokensParams,
   RhcTokenListItem,
@@ -585,6 +602,48 @@ export class RobinhoodChainX402 {
    */
   async lpEvents(params?: LpEventsParams): Promise<LpEventsResponse> {
     return this.request("/rhc/lp-events", params as Record<string, QueryValue>);
+  }
+
+
+  /* ── Token locks & vesting ── */
+
+  /**
+   * Robinhood Chain token locks & vesting feed — newest lock / vesting
+   * contracts CREATED on chain across all tokens, decoded from the locker
+   * contracts' own events on our node (PinkLock-compatible, HoodLock, Team
+   * Finance-compatible, Titan Locker, UNCX-compatible LP lockers, Sablier
+   * Lockup v4). Each row carries the on-chain schedule plus a live derived
+   * view (`locked_*`, `unlocked_*`, `next_unlock`, `status`); `sender` is the
+   * depositor (dev-lock key), `recipient` the beneficiary. **Create-only**:
+   * withdrawals are not tracked (`withdrawn` is null, the `coverage` block
+   * says `withdrawals_tracked: false`). LP locks are excluded unless
+   * `subject: "lp" | "all"` and never claim usd/pct. Amounts are raw base
+   * units as STRINGS. Cursor via `pagination.next_since` / `next_before`.
+   * Tier: **PRO+**. Key mode only. `GET /rhc/tokens/locks`
+   */
+  async tokenLocks(params?: TokenLocksParams): Promise<TokenLocksResponse> {
+    return this.request("/rhc/tokens/locks", params as Record<string, QueryValue>);
+  }
+
+  /**
+   * Every lock / vesting contract on ONE Robinhood Chain token with a live
+   * summary: locked / deposited (raw + ui + usd + % of supply), `unlocking_7d`
+   * / `unlocking_30d`, nearest `next_unlock`, `active_cancelable_by_sender`,
+   * counts by family / kind; LP locks counted apart. Tier: **PRO+**.
+   * `GET /rhc/tokens/{address}/locks`
+   */
+  async tokenLockSummary(address: string, params?: TokenLockSummaryParams): Promise<TokenLockSummaryResponse> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/locks`, params as Record<string, QueryValue>);
+  }
+
+  /**
+   * Upcoming unlock EVENTS across all active Robinhood Chain lock / vesting
+   * contracts — each contract's next cliff / tranche / final unlock inside the
+   * window with the event amount and the contract's total release over the
+   * window. Token subject only. Tier: **PRO+**. `GET /rhc/tokens/unlocks`
+   */
+  async tokenUnlocks(params?: TokenUnlocksParams): Promise<TokenUnlocksResponse> {
+    return this.request("/rhc/tokens/unlocks", params as Record<string, QueryValue>);
   }
 
   /* ── Token discovery + intelligence ── */
