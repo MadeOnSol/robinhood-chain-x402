@@ -6,7 +6,7 @@
  *
  *   • **Key mode** — `{ apiKey: "msk_…" }`: Bearer key against every
  *     /api/v1/rhc/… endpoint (54 methods, all tiers, RHC bundled at no extra cost).
- *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…" }`: an EVM
+ *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…", paymentPolicy }`: an EVM
  *     wallet holding USDG on Robinhood Chain pays per call on the x402 rail
  *     (/api/x402/rhc/…, 10 endpoints, from $0.04). The client handles the
  *     402 → sign EIP-3009 `transferWithAuthorization` (EIP-712, viem) → retry
@@ -15,6 +15,8 @@
  *
  * Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing.
  */
+import { PaymentBudget, paymentUrl, withinDeadline, type PaymentPolicy } from "./payment-policy.js";
+export { PaymentPolicyError, type PaymentPolicy, type PaymentProposal } from "./payment-policy.js";
 import type {
   KolFeedParams,
   KolFeedResponse,
@@ -274,6 +276,8 @@ export interface RobinhoodChainOptions {
   privateKey?: string;
   /** API base URL (default: https://madeonsol.com). */
   baseUrl?: string;
+  /** Required in keyless mode; binds the merchant and caps signed authorizations. */
+  paymentPolicy?: PaymentPolicy;
 }
 
 /** Decoded PAYMENT-RESPONSE of the last paid call (x402 mode). */
@@ -330,7 +334,6 @@ const TRANSFER_WITH_AUTHORIZATION_TYPES = {
     { name: "nonce", type: "bytes32" },
   ],
 } as const;
-const AUTH_TTL_SECONDS = 300;
 
 /** Collapse a concrete /rhc/… path to its template for the keyless lookup. */
 function keylessTemplate(path: string): string {
@@ -371,6 +374,9 @@ export class RobinhoodChainX402 {
   /** "key" (msk_ Bearer, all 54 methods) or "x402" (keyless USDG pay-per-call, 10 methods). */
   readonly authMode: "key" | "x402";
   private privateKey?: string;
+  private paymentBudget?: PaymentBudget;
+  /** Authorized/reserved USDG atomic units for this client, including uncertain outcomes. */
+  get authorizedAmountAtomic(): string { return this.paymentBudget?.authorizedAmountAtomic ?? "0"; }
   // viem LocalAccount, resolved lazily on first paid call (viem is an optional peer dep).
   private account: { address: string; signTypedData: (args: unknown) => Promise<string> } | null = null;
   /** Last response's rate-limit headers (X-RateLimit-*, X-Request-Id). */
@@ -392,6 +398,8 @@ export class RobinhoodChainX402 {
       if (!/^0x[0-9a-fA-F]{64}$/.test(opts.privateKey)) {
         throw new Error("privateKey must be a 0x-prefixed 32-byte hex EVM private key (the wallet that holds USDG on Robinhood Chain).");
       }
+      paymentUrl(this.baseUrl);
+      this.paymentBudget = new PaymentBudget(opts.paymentPolicy);
       this.authMode = "x402";
       this.privateKey = opts.privateKey;
       this.headers = { "User-Agent": `robinhood-chain-x402/${VERSION}` };
@@ -431,39 +439,59 @@ export class RobinhoodChainX402 {
     const url = new URL(`/api/x402${path}`, this.baseUrl);
     if (params) for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, String(v));
 
-    const first = await fetch(url.toString(), { headers: this.headers });
-    if (first.status !== 402) {
-      // Free / already-paid / error — same handling as key mode.
-      if (!first.ok) throw new Error(`Robinhood Chain API error ${first.status}: ${await first.text().catch(() => "")}`);
-      return first.json() as Promise<T>;
-    }
-    const challenge = (await first.json().catch(() => null)) as { accepts?: Array<{ network: string; payTo: string; amount: string; asset?: string }> } | null;
-    const leg = challenge?.accepts?.find((a) => a.network === RHC_NETWORK);
-    if (!leg) throw new Error(`x402 challenge for ${path} has no USDG-on-Robinhood-Chain leg (accepts: ${JSON.stringify(challenge?.accepts?.map((a) => a.network))})`);
-
-    const account = await this.signer();
-    const now = Math.floor(Date.now() / 1000);
-    const nonce = randomNonce();
-    const to = leg.payTo;
-    const signature = await account.signTypedData({
-      domain: USDG_DOMAIN,
-      types: TRANSFER_WITH_AUTHORIZATION_TYPES,
-      primaryType: "TransferWithAuthorization",
-      message: { from: account.address, to, value: BigInt(leg.amount), validAfter: 0n, validBefore: BigInt(now + AUTH_TTL_SECONDS), nonce },
-    });
-    const paymentPayload = {
-      x402Version: 2, scheme: "exact", network: RHC_NETWORK,
-      payload: { signature, authorization: { from: account.address, to, value: String(leg.amount), validAfter: "0", validBefore: String(now + AUTH_TTL_SECONDS), nonce } },
-    };
-    const res = await fetch(url.toString(), { headers: { ...this.headers, "PAYMENT-SIGNATURE": b64(JSON.stringify(paymentPayload)) } });
-    const settle = res.headers.get("payment-response");
-    if (settle) { try { this.lastPayment = JSON.parse(unb64(settle)); } catch { this.lastPayment = null; } }
-    this.lastRateLimit = { limit: null, remaining: null, reset: null, requestId: res.headers.get("x-request-id") };
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`x402 payment for ${path} rejected (HTTP ${res.status}): ${body.slice(0, 400)}`);
-    }
-    return res.json() as Promise<T>;
+    const budget = this.paymentBudget!;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Keyless payment deadline exceeded")), budget.timeoutMs);
+    const signal = controller.signal;
+    try {
+      const first = await fetch(url.toString(), { headers: this.headers, redirect: "error", signal });
+      if (first.status !== 402) {
+        if (!first.ok) throw new Error(`Robinhood Chain API error ${first.status}: ${await first.text().catch(() => "")}`);
+        return await first.json() as T;
+      }
+      const challenge: unknown = await first.json().catch(() => null);
+      const leg = budget.select(challenge, url.toString());
+      const reservation = budget.reserve(leg);
+      try {
+        await budget.checkApproval(leg, signal);
+        const account = await withinDeadline(this.signer(), signal);
+        signal.throwIfAborted();
+        const now = Math.floor(Date.now() / 1000);
+        // 60 s back: a client clock running a few seconds fast must not produce an
+        // authorization the chain rejects after the budget is spent. validBefore bounds its life.
+        const validAfter = Math.max(0, now - 60);
+        const validBefore = now + leg.maxTimeoutSeconds;
+        const nonce = randomNonce();
+        const to = leg.payTo;
+        reservation.signerInvoked();
+        const signature = await withinDeadline(account.signTypedData({
+          domain: USDG_DOMAIN,
+          types: TRANSFER_WITH_AUTHORIZATION_TYPES,
+          primaryType: "TransferWithAuthorization",
+          message: { from: account.address, to, value: BigInt(leg.amount), validAfter: BigInt(validAfter), validBefore: BigInt(validBefore), nonce },
+        }), signal);
+        signal.throwIfAborted();
+        if (Math.floor(Date.now() / 1000) >= validBefore) throw new Error("Payment authorization expired before submission");
+        const paymentPayload = {
+          x402Version: 2, scheme: "exact", network: RHC_NETWORK,
+          payload: { signature, authorization: { from: account.address, to, value: leg.amount, validAfter: String(validAfter), validBefore: String(validBefore), nonce } },
+        };
+        // The deadline bounds everything up to SUBMISSION. The signed payment may
+        // settle once sent, so the paid request gets its own bound and its body is
+        // never discarded because the original deadline passed mid-download.
+        clearTimeout(timer);
+        const paidSignal = AbortSignal.timeout(budget.timeoutMs);
+        const res = await fetch(url.toString(), { headers: { ...this.headers, "PAYMENT-SIGNATURE": b64(JSON.stringify(paymentPayload)) }, redirect: "error", signal: paidSignal });
+        const settle = res.headers.get("payment-response");
+        if (settle) { try { this.lastPayment = JSON.parse(unb64(settle)); } catch { this.lastPayment = null; } }
+        this.lastRateLimit = { limit: null, remaining: null, reset: null, requestId: res.headers.get("x-request-id") };
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          throw new Error(`x402 payment for ${path} rejected (HTTP ${res.status}): ${body.slice(0, 400)}`);
+        }
+        return await res.json() as T;
+      } finally { reservation.release(); }
+    } finally { clearTimeout(timer); }
   }
 
   private async request<T>(path: string, params?: Record<string, QueryValue>): Promise<T> {
@@ -1311,6 +1339,7 @@ export function createClient(apiKey: string, baseUrl?: string): RobinhoodChainX4
  * given EVM wallet (no signup, no key; wallet needs USDG, not ETH). Needs viem.
  * @param privateKey 0x-prefixed private key of the payer wallet — read it from an env var, never hard-code.
  */
-export function createKeylessClient(privateKey: string, baseUrl?: string): RobinhoodChainX402 {
-  return new RobinhoodChainX402({ privateKey, baseUrl });
+export function createKeylessClient(privateKey: string, baseUrl?: string, paymentPolicy?: PaymentPolicy): RobinhoodChainX402 {
+  return new RobinhoodChainX402({ privateKey, baseUrl, paymentPolicy });
 }
+

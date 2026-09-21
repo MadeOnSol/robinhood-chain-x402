@@ -15,6 +15,8 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 > **Two auth modes.** **Key mode** — an `msk_` Bearer API key calls every Robinhood Chain v1 route below (54 methods, all tiers). **Keyless x402 mode** (since 0.7.0) — pass an EVM `privateKey` instead and the client pays per call in **USDG on Robinhood Chain** on the 10-endpoint x402 rail (from $0.04/call, no signup, wallet needs USDG but no ETH — our facilitator relays gas). It handles the 402 → sign EIP-3009 `transferWithAuthorization` → retry flow itself; the rail is discoverable at [`/api/x402/rhc`](https://madeonsol.com/api/x402/rhc) and documented at [madeonsol.com/robinhood/x402](https://madeonsol.com/robinhood/x402). For keyless USDC-per-call on the Solana API, use [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
 
+> **New in 0.11.0 — BREAKING for keyless (x402) mode only: an explicit payment policy is required (security fix, SDK-01).** Before, a keyless client signed whatever USDG amount and recipient a 402 challenge asked for. Now `createKeylessClient(key, baseUrl, paymentPolicy)` / `new RobinhoodChainX402({ privateKey, paymentPolicy })` requires `{ payTo, maxAmountAtomic, maxTotalAmountAtomic }` (optional `timeoutMs`, `authorizationTtlSeconds`, `beforePayment`), and the client refuses before signing any challenge whose scheme, network (`eip155:4663`), asset (USDG), recipient or amount falls outside it. Use the canonical merchant address below and caps of at least `40000` (0.04 USDG) per call. The budget is per client instance: it is not wallet-wide, not shared between clients or processes, and resets when a new instance is created. A paid response that arrives after the payment deadline is still returned with its receipt. **API-key (`msk_`) users: no change, no new config.** Keyless requires `baseUrl` exactly `https://madeonsol.com`.
+
 > **New in 0.10.0 — 11 endpoints closing the RHC agentic-infra coverage gap.** Found by an internal audit comparing this client against MCP/ElizaOS/SAK (which already had all of these): `kolCoordination`, `kolFirstTouches`, `deployerTrajectory`, `deployerTokens`, `deployerHistory`, `deployerBestTokens`, `deployerStats`, `recentBonds`, `tokenBatch`, `tokenBatchBuyerQuality` (the last two use the body-capable `send()` path — key-mode only, same as every other write), and `tokenEarlyBuyers` — first buyers of a token, ranked, with still-holding status, previously unreachable from any agent surface.
 >
 > **New in 0.9.1 — stream tokens never expire.** `POST /api/v1/stream/token` now returns the **same token on every call, forever** (server change of 2026-08-27). `StreamToken.expires_at` is typed `string | null` and `next_refresh_at` `string | null` — both are **always `null`** now and kept only for wire compatibility; the response gained `rotated: boolean` and `lifetime: string`. A token only stops working when the subscription lapses or you replace it with the new `client.getStreamToken({ rotate: true })` (the previous value keeps working for 60 s). The server never rotates on its own and never sends `token_refresh` unless you rotated; a `4001` close means "mint again", never a timer. Preferred handshake auth is `Authorization: Bearer <token>` (`?token=` still works and is masked in access logs); RHC channels ride the same socket and token as Solana. `client.stream()` already fetched a token on every (re)connect and never read `expires_at`, so its behavior is unchanged — only its docs are.
@@ -23,7 +25,7 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 > **New in 0.8.0 — `holder_growth`: who arrived and who left.** `client.tokenHolders(address)` (key mode and the keyless USDG rail alike — same handler) now returns `holder_growth` on `GET /rhc/tokens/{address}/holders`: `{ "1h", "24h", "7d" }` × `{ cutoff_block, entered, entered_still_holding, exited, net }`. *entered* = addresses whose first `Transfer` of the token landed at-or-after the window's cutoff block (any current balance); *entered_still_holding* = those still non-zero; *exited* = pre-existing holders whose last movement in the window left them at zero; *net* ≈ the change in `holder_count`. Pools and burn addresses are excluded from every count. This exists because RHC balances are folded from ERC-20 Transfer logs on our own node — the fold keeps first-seen and last-moved blocks per address and retains zero-balance rows — so it is a direct read, not an estimate; the Solana census is a point-in-time ledger scan with no history and cannot answer this. A window is `null` (never 0) only when the chain had no ingested trades in it; the whole block is `null` only if the growth read failed. Sanity check from ship day: a token launched that morning showed 593 entered / 560 still holding over 24h, and `holder_count` was exactly 560.
 
-> **New in 0.7.0 — keyless x402 mode.** `createKeylessClient("0x…")` / `new RobinhoodChainX402({ privateKey })`: any EVM wallet holding USDG on chain 4663 can call `kolFeed`, `kolHotTokens`, `kolLeaderboard`, `token`, `tokenBuyerQuality`, `tokenKolConsensus`, `tokenRisk`, `tokenHolders`, `walletPnl` and `deployerAlerts` with no API key. The signature is EIP-712 over the USDG domain `{ Global Dollar, 1, 4663 }`, one payment attempt per call, `client.lastPayment` exposes the on-chain settlement (`transaction`, `payer`). Requires the optional peer dependency `viem` (`npm i viem`); key mode still has zero runtime deps. Calling any other method on a keyless client throws `KeylessNotAvailableError` — it names the rail, it does not silently downgrade. Also new on the server this release: `/rhc/equities` (beacon-verified tokenized stocks/ETFs), `/rhc/tokens?sort=newest&since=`, `/rhc/lp-events` — key-mode bindings for those follow in the next minor.
+> **New in 0.7.0 — keyless x402 mode.** `createKeylessClient("0x…", undefined, paymentPolicy)` / `new RobinhoodChainX402({ privateKey, paymentPolicy })`: any EVM wallet holding USDG on chain 4663 can call `kolFeed`, `kolHotTokens`, `kolLeaderboard`, `token`, `tokenBuyerQuality`, `tokenKolConsensus`, `tokenRisk`, `tokenHolders`, `walletPnl` and `deployerAlerts` with no API key. The signature is EIP-712 over the USDG domain `{ Global Dollar, 1, 4663 }`, one payment attempt per call, `client.lastPayment` exposes the on-chain settlement (`transaction`, `payer`). Requires the optional peer dependency `viem` (`npm i viem`); key mode still has zero runtime deps. Calling any other method on a keyless client throws `KeylessNotAvailableError` — it names the rail, it does not silently downgrade. Also new on the server this release: `/rhc/equities` (beacon-verified tokenized stocks/ETFs), `/rhc/tokens?sort=newest&since=`, `/rhc/lp-events` — key-mode bindings for those follow in the next minor.
 
 > **New in 0.6.0 — wallet intelligence.** Ten new operations covering the Robinhood Chain wallet surface, which had no SDK binding at all until now: `wallet()` (90-day profile with reputation flags), `walletPnl()` (FIFO PnL with daily curve, closed and open positions), `walletPositions()` (open book marked to market), `walletTrades()` (per-wallet keyset-paginated tape), plus the watchlist — `walletTrackerList()`, `walletTrackerAdd()`, `walletTrackerRemove()`, `walletTrackerRelabel()`, `walletTrackerTrades()` and `walletTrackerSummary()`. Everything is **ETH**-denominated, and cost basis is FIFO over a rolling 90-day window — `cost_basis_observable_from` names the date the window opens, so a position opened before it reads as a sell with no matching buy. The profile / PnL / positions trio shares ONE snapshot cache server-side, so calling all three on an address costs roughly one computation rather than three; `cache_hit` says which call paid for it. Watchlist quotas are **per chain** (PRO 50 / ULTRA 100 / BUSINESS 500 RHC wallets), independent of your Solana list. Dependency ranges are now bounded to the versions actually tested (`@x402/*` `^2.x`, `@solana/kit` `^5.5.1`) instead of open-ended `>=0.0.1`, and the lazily-imported x402 peers are marked optional — a keyed install no longer pulls the whole Solana stack.
 
@@ -62,21 +64,56 @@ const client = new RobinhoodChainX402({
 
 ### Keyless x402 mode — pay per call in USDG, no API key
 
+**Canonical MadeOnSol merchant address (USDG on Robinhood Chain, chain 4663):**
+`0xb2Af9Ad9EE09dAc999ac5A6Db993739128b27F10`. It is pinned here (GitHub + registry
+README) so you do not have to take it from a 402; https://madeonsol.com/api/x402/rhc
+lists the same value as a second check. If a challenge names any other address the
+client refuses to sign; that is the point of the policy. A rotation would ship as a
+new package release with a changelog entry, never only in a 402.
+
 ```ts
 import { createKeylessClient } from "robinhood-chain-x402";
 
 // An EVM wallet that holds USDG on Robinhood Chain (chain 4663). No ETH needed.
 // Read the key from the environment — never hard-code it.
-const agent = createKeylessClient(process.env.RHC_PAYER_KEY!);
+const agent = createKeylessClient(process.env.RHC_PAYER_KEY!, undefined, {
+  payTo: "0xb2Af9Ad9EE09dAc999ac5A6Db993739128b27F10", // canonical MadeOnSol merchant (see above)
+  maxAmountAtomic: "40000",           // At most 0.04 USDG per authorization.
+  maxTotalAmountAtomic: "1000000",    // At most 1 USDG for this client instance.
+});
 
-const risk = await agent.tokenRisk("0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"); // NVDA, $0.02
+const risk = await agent.tokenRisk("0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec"); // NVDA; the USDG leg has a $0.04 floor
 console.log(risk.score, risk.sellability, agent.lastPayment?.transaction); // settlement tx on Robinhood Chain
 
 // Keyless rail = 10 endpoints; anything else throws KeylessNotAvailableError:
 console.log(agent.constructor.KEYLESS_ENDPOINTS);
 ```
 
-How it works: the first request gets a `402` with `accepts[]`; the client picks the `eip155:4663` leg, signs an EIP-3009 `transferWithAuthorization` (EIP-712 domain `{ name: "Global Dollar", version: "1", chainId: 4663 }`, 5-minute validity, random 32-byte nonce) with `viem`, and retries with `PAYMENT-SIGNATURE`. Our facilitator verifies balance + nonce and settles on-chain (`transferWithAuthorization`, gas paid by us); the `PAYMENT-RESPONSE` header comes back decoded on `client.lastPayment`. Prices: from **$0.04** on the USDG leg (the relayer's gas floor); the same endpoints also accept USDC on Solana via [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+How it works: the first request gets a `402` with `accepts[]`; the client validates the exact USDG/`eip155:4663` offer against the trusted recipient and configured limits, signs an EIP-3009 `transferWithAuthorization` (EIP-712 domain `{ name: "Global Dollar", version: "1", chainId: 4663 }`, at most 60-second validity by default (also capped by the challenge), 5-second valid-after clock skew, random 32-byte nonce) with `viem`, and retries with `PAYMENT-SIGNATURE`. Our facilitator verifies balance + nonce and settles on-chain (`transferWithAuthorization`, gas paid by us); the `PAYMENT-RESPONSE` header comes back decoded on `client.lastPayment`. Prices: from **$0.04** on the USDG leg (the relayer's gas floor); the same endpoints also accept USDC on Solana via [`madeonsol-x402`](https://www.npmjs.com/package/madeonsol-x402).
+
+### Required payment policy (SDK-01 upgrade)
+
+Keyless construction now requires `paymentPolicy`; API-key mode is unchanged. This is a
+breaking keyless change: deploy updated callers together with the next reviewed release.
+The recipient must come from trusted configuration, never copied from an untrusted 402.
+Only `exact`, chain `eip155:4663`, and USDG contract
+`0x5fc5360d0400a0fd4f2af552add042d716f1d168` are allowed. HTTPS is required and
+redirects are refused on both requests. Amounts are positive decimal strings or bigint
+in atomic units (1 USDG = 1,000,000); challenge amounts must be decimal strings.
+
+`maxAmountAtomic` caps each authorization; `maxTotalAmountAtomic` caps the lifetime of
+one client, including concurrent requests. `authorizedAmountAtomic` reports reserved
+plus signer-attempted units. A denied/timed-out approval releases its unsigned reservation;
+once signing is invoked, the reservation remains consumed even if signing, HTTP or
+settlement fails. This deliberately counts uncertain outcomes, not confirmed expenditure.
+There is no automatic reset or refund. New clients/processes have separate budgets: use
+one long-lived client per allowance; a wallet-wide/durable budget needs an external coordinator.
+
+Optional `beforePayment(proposal)` may return a boolean or Promise<boolean>; only literal
+`true` approves. The proposal is immutable and built-in checks cannot be waived by the hook.
+`timeoutMs` defaults to 30000 for the whole keyless operation, including approval/signing;
+`authorizationTtlSeconds` defaults to 60 and may be 1–300. A late signature is never submitted.
+Timeout cannot undo a proof already sent or forcibly stop synchronous application code.
 
 ## Endpoints — all 54 Robinhood Chain routes
 
@@ -259,3 +296,4 @@ console.log(client.lastRateLimit); // { limit, remaining, reset, requestId }
 ## License
 
 MIT © MadeOnSol
+
