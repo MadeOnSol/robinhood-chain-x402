@@ -154,6 +154,7 @@ export type {
   EquitiesResponse,
   RhcTokenDeployer,
   RhcTokenKolActivity,
+  RhcKolParticipant,
   RhcTokenDetailResponse,
   CandlesParams,
   RhcCandle,
@@ -600,7 +601,7 @@ export class RobinhoodChainX402 {
    * The globally earliest buy by any tracked KOL per token — the discovery
    * signal. Tier: BASIC. `GET /rhc/kol/first-touches`. Added 2026-09-10.
    */
-  async kolFirstTouches(params?: { limit?: number; since?: string; before?: string; min_eth?: number; token_age_max_min?: number; launchpad?: string; min_mc_usd?: number; max_mc_usd?: number }): Promise<unknown> {
+  async kolFirstTouches(params?: { limit?: number; since?: string; before?: string; /** Preferred: next_cursor from the previous page (strict keyset). */ cursor?: string; min_eth?: number; token_age_max_min?: number; launchpad?: string; min_mc_usd?: number; max_mc_usd?: number }): Promise<unknown> {
     return this.request("/rhc/kol/first-touches", params as Record<string, QueryValue>);
   }
 
@@ -877,7 +878,7 @@ export class RobinhoodChainX402 {
   }
 
   /** Recent graduations (defined purely by peak MC, no bonding-curve milestone on RHC). Tier: BASIC. `GET /rhc/deployer-hunter/recent-bonds` */
-  async recentBonds(params?: { deployer_tier?: "elite" | "good" | "neutral" | "spammer"; min_peak?: number; limit?: number }): Promise<unknown> {
+  async recentBonds(params?: { deployer_tier?: "elite" | "good" | "neutral" | "spammer"; min_peak?: number; limit?: number; /** `next_cursor` from the previous page. */ cursor?: string }): Promise<unknown> {
     return this.request("/rhc/deployer-hunter/recent-bonds", params as Record<string, QueryValue>);
   }
 

@@ -35,8 +35,10 @@ export interface RhcError {
 export interface KolFeedParams {
   /** Page size (1–100, default 50). */
   limit?: number;
-  /** Cursor: ISO timestamp; returns trades strictly older than this. */
+  /** LEGACY cursor: ISO timestamp; returns trades strictly older than this (skips same-timestamp rows). Prefer `cursor`. */
   before?: string;
+  /** PREFERRED pagination: `next_cursor` from the previous page — opaque strict keyset (no skipped/repeated rows at shared timestamps). Cannot be combined with `before`. */
+  cursor?: string;
   /** Only buys or only sells. */
   action?: TradeAction;
   /** Filter to a single KOL by their EVM wallet (0x, 40 hex). */
@@ -83,6 +85,12 @@ export interface KolFeedResponse {
   count: number;
   data_age_seconds: number | null;
   next_before: string | null;
+  /** Pass as `cursor` for the next (older) page; null at the end. */
+  next_cursor?: string | null;
+  /** false only when the feed is exhausted. */
+  has_more?: boolean;
+  /** Present when a filter was applied after the candidate fetch; scan_truncated=true means more matches MAY exist past next_cursor. */
+  scan?: { post_filtered: boolean; scanned: number; scan_truncated: boolean; scan_budget: number };
 }
 
 /* ── /rhc/kol/leaderboard ── */
@@ -306,8 +314,10 @@ export interface TokenLocksParams {
   limit?: number;
   /** ISO instant — only locks created after it (poll cursor = pagination.next_since). */
   since?: string;
-  /** ISO instant — only locks created before it (page back = pagination.next_before). */
+  /** ISO instant — only locks created before it (page back = pagination.next_before). LEGACY strict bound — prefer `cursor`. */
   before?: string;
+  /** Opaque strict (created_at, id) cursor — `pagination.next_cursor`. Not combinable with `before`. */
+  cursor?: string;
   token?: string;
   /** Depositor / creator wallet. */
   sender?: string;
@@ -404,7 +414,7 @@ export interface RhcLockCoverage {
 export interface TokenLocksResponse {
   chain: Chain;
   locks: RhcTokenLock[];
-  pagination: { limit: number; count: number; has_more: boolean; next_since: string | null; next_before: string | null };
+  pagination: { limit: number; count: number; has_more: boolean; next_cursor?: string | null; next_since: string | null; next_before: string | null; scan?: { post_filtered: boolean; scanned: number; scan_truncated: boolean; scan_budget: number } };
   stream: { channel: string; note?: string; [k: string]: unknown };
   coverage: RhcLockCoverage;
   meta: { families: readonly string[]; note: string };
@@ -529,6 +539,13 @@ export interface TokensResponse {
   tokens: RhcTokenListItem[];
   count: number;
   sort: string;
+  /** Present when a filter was scanned (audit F09); scan_truncated ⇒ more matches MAY exist. */
+  scan?: { post_filtered: true; scanned: number; scan_truncated: boolean; scan_budget: number };
+  /** sort=oldest/newest walk fields (see the API docs). */
+  has_more?: boolean;
+  next_cursor?: string | null;
+  next_after?: string | null;
+  next_since?: string | null;
 }
 
 /* ── /rhc/equities ── */
@@ -594,23 +611,47 @@ export interface EquitiesResponse {
 
 /* ── /rhc/tokens/{address} ── */
 
+/** v1.x (audit 2026-09-21) — the creator is returned whenever the token row names it;
+ *  reputation fields are null until the reputation view has a row (history_status
+ *  "pending") or when that lookup failed ("unavailable"). */
 export interface RhcTokenDeployer {
   address: string;
-  tier: DeployerTier;
-  tokens_deployed: number;
+  tier: DeployerTier | null;
+  tokens_deployed: number | null;
   graduation_rate: number | null;
   runner_rate: number | null;
-  runners: number;
+  runners: number | null;
   best_peak_mc_usd: number | null;
-  launchpads: string[];
+  launchpads: string[] | null;
+  identity_status?: "known";
+  history_status?: "computed" | "pending" | "unavailable";
+}
+
+export interface RhcKolParticipant {
+  kol_id: string;
+  name: string | null;
+  twitter_url: string | null;
+  buys: number;
+  sells: number;
+  last_trade_at: string | null;
 }
 
 export interface RhcTokenKolActivity {
+  /** Distinct KOL identities (stable KOL id, not display names). All-time since the audit fix. */
   distinct_kols: number;
   names: string[];
   buys: number;
   sells: number;
   net_eth: number;
+  distinct_wallets?: number;
+  buy_eth?: number;
+  sell_eth?: number;
+  participants?: RhcKolParticipant[];
+  identity?: "kol_wallet_id";
+  window?: { kind: "all_time" | "latest_trades"; first_trade_at: string | null; last_trade_at: string | null };
+  basis?: string;
+  sample_size?: number;
+  complete?: boolean;
 }
 
 export interface RhcTokenDetailResponse {
@@ -638,6 +679,13 @@ export interface RhcTokenDetailResponse {
   primary_dex: string | null;
   primary_pool: string | null;
   last_trade_time: string | null;
+  /** v1.x — price freshness anchored to last_trade_time (stale > 15 min). */
+  price_observed_at?: string | null;
+  price_age_seconds?: number | null;
+  price_is_stale?: boolean;
+  price_updated_at?: string | null;
+  deployer_identity_status?: "known" | "unresolved" | "unavailable";
+  degraded_fields?: string[];
   deployer: RhcTokenDeployer | null;
   /** Up to 10 other tokens by the same deployer (symbol or address). */
   deployer_other_tokens: string[];
@@ -720,7 +768,8 @@ export interface RhcKolConsensusResponse {
 
 /* ── /rhc/tokens/{address}/buyer-quality ── */
 
-export type BuyerQualityConfidence = "low" | "medium" | "high";
+/** "insufficient_data" (audit 2026-09-21) when no buyer's win rate fed the score. */
+export type BuyerQualityConfidence = "insufficient_data" | "low" | "medium" | "high";
 export type BuyerQualitySignal = "positive" | "neutral" | "negative";
 
 export interface RhcBuyerQualityBreakdown {
@@ -735,6 +784,8 @@ export interface RhcBuyerQualityBreakdown {
   /** Percent (0–100), non-bot buyers with ≥3 tokens of history. */
   avg_historical_win_rate: number | null;
   bot_dominated: boolean;
+  wallets_with_history?: number;
+  qualified_win_rate_wallets?: number;
 }
 
 export interface RhcBuyerQuality {
@@ -754,6 +805,8 @@ export interface RhcBuyerQualityResponse {
   chain: Chain;
   token_address: string;
   current_mc_usd: number | null;
+  /** distinct_first_buy = first 20 distinct EOAs by first buy; legacy_row_window = pre-rhc/011 fallback. */
+  cohort_selection?: "distinct_first_buy" | "legacy_row_window";
   quality: RhcBuyerQuality;
   coverage: RhcBuyerQualityCoverage;
   /** Present only when buyer data is insufficient. */
@@ -824,8 +877,10 @@ export interface DeployerAlertsParams {
   include_untradeable?: boolean;
   /** Only alerts newer than this ISO8601 time — the polling cursor (pass back next_since). */
   since?: string;
-  /** Only alerts older than this ISO8601 time — backward pagination. */
+  /** Only alerts older than this ISO8601 time — LEGACY backward pagination (skips same-event_at siblings). */
   before?: string;
+  /** Opaque strict (event_at, id) cursor — `next_cursor` from the previous page. Not combinable with before/offset. */
+  cursor?: string;
 }
 export interface DeployerAlert {
   token_address: string;
@@ -846,6 +901,13 @@ export interface DeployerAlertsResponse {
   limit: number;
   offset: number;
   next_since?: string | null;
+  next_event_at?: string | null;
+  next_before?: string | null;
+  /** Pass as `cursor` for the next (older) page; null at the end. */
+  next_cursor?: string | null;
+  /** false only when the feed is exhausted. */
+  has_more?: boolean;
+  scan?: { post_filtered: boolean; scanned: number; scan_truncated: boolean; scan_budget: number };
   [key: string]: unknown;
 }
 

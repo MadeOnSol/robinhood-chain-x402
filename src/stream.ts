@@ -17,7 +17,7 @@
  * the optional `ws` package) and the browser (native WebSocket). Zero required
  * dependencies.
  */
-import type { StreamToken } from "./types";
+import type { StreamToken } from "./types.js";
 
 /** Robinhood Chain channels you can subscribe to. */
 export type StreamChannel =
