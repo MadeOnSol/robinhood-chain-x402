@@ -97,7 +97,7 @@ import { RobinhoodChainStream } from "./stream.js";
 import type { StreamClientOptions } from "./stream.js";
 import { VERSION } from "./version.js";
 
-export { RobinhoodChainStream } from "./stream.js";
+export { RobinhoodChainStream, STREAM_CHANNELS } from "./stream.js";
 export type {
   StreamClientOptions,
   StreamChannel,
@@ -105,6 +105,10 @@ export type {
   StreamEvent,
   StreamLifecycleEvent,
   StreamWarning,
+  StreamCursor,
+  StreamReplayResult,
+  StreamGap,
+  StreamFatal,
 } from "./stream.js";
 
 export type {
@@ -1114,8 +1118,9 @@ export class RobinhoodChainX402 {
   /**
    * Create a price alert. The baseline MC is captured **now**, so the alert is a
    * delta from the moment you set it, and the token must already be tracked with
-   * a market cap. RHC alerts are POLLED (~15s off `rhc_token_prices`), not
-   * evaluated in a live price loop — the response's `evaluation` block says so.
+   * a market cap. RHC alerts are evaluated as trades land on the `rhc:dex_trade`
+   * feed (price-table polls are the safety net) — a few seconds, not sub-second
+   * like Solana; the response's `evaluation` block says so.
    * Tier: **PRO+**. `POST /rhc/price-alerts`
    */
   async priceAlertsCreate(params: PriceAlertCreateParams): Promise<PriceAlertCreateResponse> {

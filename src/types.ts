@@ -1235,14 +1235,22 @@ export interface PriceAlertCreateParams {
 }
 
 /**
- * How RHC alerts are evaluated. **Not parity with Solana**: these are polled off
- * `rhc_token_prices` rather than reacting to a live price loop, because the RHC
- * price writer emits no pg_notify. Effective latency is the poll interval plus
- * the token's own price-update cadence.
+ * How RHC alerts are evaluated. Since 2026-09-15 they are **event-driven** off
+ * the `rhc:dex_trade` feed (each trade re-evaluates the alerts on its token),
+ * with a price-table poll (`fallback_poll_seconds`: fast while the feed is
+ * degraded or a trade carried no market cap, slow otherwise) and a trade-tape
+ * replay after a feed outage as safety nets. Latency is a few seconds (the
+ * chain trade flush is ~2 s) — **not** parity with the sub-second Solana
+ * alerts. Older servers answered `mode: "polled"` (a ~15 s poll).
  */
 export interface PriceAlertEvaluation {
-  mode: "polled";
+  mode: "event_driven" | "polled";
+  /** The feed that triggers evaluation (`"rhc:dex_trade"`); absent when `polled`. */
+  trigger?: string;
+  /** Kept for compatibility: now the fast fallback poll (was the 15 s poll interval). */
   interval_seconds: number;
+  /** Safety-net price-table poll intervals in seconds. */
+  fallback_poll_seconds?: { fast: number; slow: number };
   note: string;
 }
 
