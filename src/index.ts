@@ -109,6 +109,8 @@ export type {
   StreamReplayResult,
   StreamGap,
   StreamFatal,
+  StreamSubscription,
+  StreamSubscribeOptions,
 } from "./stream.js";
 
 export type {
@@ -218,6 +220,16 @@ export type {
   PriceAlertEventsParams,
   RhcPriceAlertEvent,
   PriceAlertEventsResponse,
+  RhcSideIdentity,
+  RhcMetadataStatus,
+  RhcPriceStatus,
+  RhcPriceSource,
+  RhcMcStatus,
+  RhcSideReason,
+  RhcDexTradeEvent,
+  RhcDexTradeUnattributedEvent,
+  RhcTickQualityReason,
+  RhcTokenPriceTick,
   RhcCoordinationAlertRule,
   CoordinationAlertListResponse,
   CoordinationAlertCreateParams,
