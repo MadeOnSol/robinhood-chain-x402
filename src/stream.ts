@@ -18,7 +18,11 @@
  * RHC trade, with table polls as a safety net — `rhc:kol:coordination`,
  * `rhc:kol:first_touches`), `rhc:lp_events` (ULTRA+, liquidity add / remove /
  * pool_created — see `RhcLpStreamEvent`) and, with `filters.lifecycle: true`
- * on `rhc:token_locks`, the unlock-schedule events. Same wire protocol as the
+ * on `rhc:token_locks`, the unlock-schedule events, and (Phase 4, PRO+,
+ * scoped) `rhc:token_candles` (live 1-minute candles — see
+ * `RhcCandleClosedEvent`), `rhc:token_risk` (risk-verdict changes — see
+ * `RhcRiskVerdictChangedEvent`) and `rhc:wallet_scores` (deployer tier
+ * changes — see `RhcDeployerTierChangedEvent`). Same wire protocol as the
  * Solana stream client.
  *
  * Recovery (v1 resume): the client remembers a cursor `{instance, seq, ts}` —
@@ -50,6 +54,9 @@ export type StreamChannel =
   | "rhc:token_locks"             // a token lock / vesting contract created on chain — PRO+
   | "rhc:token_prices"            // per-token price ticks for filters.addresses (snapshot, then ≤1 tick / address / 250 ms, with quality) — PRO+, address-scoped
   | "rhc:lp_events"               // liquidity adds / removes / pool creations with v3/v4 in-range active-liquidity delta (Phase 3) — ULTRA
+  | "rhc:token_candles"           // live 1-minute candles for filters.addresses (own cap PRO 25 / ULTRA 100 / BUSINESS 250), filters.updates adds the open minute (Phase 4) — PRO+
+  | "rhc:token_risk"              // risk-verdict changes + an rhc:risk_verdict snapshot for filters.addresses (Phase 4) — PRO+
+  | "rhc:wallet_scores"           // deployer tier changes for filters.wallets (0x deployers) (Phase 4) — PRO+
   /**
    * @deprecated `rhc:trades` was never a real server channel — 0.4.0 subscribers
    * got a `channels_rejected` warning and silence. The server now accepts it as
@@ -71,6 +78,9 @@ export const STREAM_CHANNELS: readonly StreamChannel[] = [
   "rhc:token_locks",
   "rhc:token_prices",
   "rhc:lp_events",
+  "rhc:token_candles",
+  "rhc:token_risk",
+  "rhc:wallet_scores",
 ];
 
 /** Event names delivered on those channels. */
@@ -88,7 +98,14 @@ export type StreamEventName =
   | "rhc:token_unlock_upcoming"   // on rhc:token_locks with filters.lifecycle: true — an unlock within 24 h (2026-09-23)
   | "rhc:token_unlock_available"  // on rhc:token_locks with filters.lifecycle: true — claimable per the schedule, NOT claimed
   | "rhc:token_price"             // on rhc:token_prices (frame.snapshot === true for the per-address snapshot sent on subscribe)
-  | "rhc:lp_event";               // on rhc:lp_events — add / remove / pool_created (2026-09-23)
+  | "rhc:lp_event"                // on rhc:lp_events — add / remove / pool_created (2026-09-23)
+  // WS Phase 4 (2026-09-23)
+  | "rhc:candle_closed"           // on rhc:token_candles — the stored 1-minute row, revision 0 (RhcCandleClosedEvent)
+  | "rhc:candle_revised"          // on rhc:token_candles — the stored row rewritten, revision n > 0 (same shape)
+  | "rhc:candle_update"           // on rhc:token_candles with filters.updates: true — in-progress minute, a state stream (no id/seq)
+  | "rhc:risk_verdict_changed"    // on rhc:token_risk (RhcRiskVerdictChangedEvent)
+  | "rhc:risk_verdict"            // on rhc:token_risk — snapshot frame (frame.snapshot === true), the current stored verdict
+  | "rhc:deployer_tier_changed";  // on rhc:wallet_scores (RhcDeployerTierChangedEvent)
 
 // ── Shared stream core ──────────────────────────────────────────────────────
 // Everything below this line is IDENTICAL in the four TypeScript SDKs
