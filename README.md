@@ -138,7 +138,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 | Method | Route | Tier | Description |
 |---|---|---|---|
 | `trades(params?)` | `/api/v1/rhc/trades` | PRO+ | Every Uniswap v2/v3/v4 swap with the effective `trader_eoa`, gas/ordering for MEV, and KOL/deployer flags |
-| `lpEvents(params?)` | `/api/v1/rhc/lp-events` | PRO+ | Liquidity **removals** feed — v2/v3 `Burn` + v4 negative `ModifyLiquidity` on tracked pools; `provider_is_token_deployer` = rug tell. Removals only (`coverage.adds_persisted: false`); raw uint256 string amounts; filters `token` / `pool` / `provider` / `dex`, cursor `next_before` |
+| `lpEvents(params?)` | `/api/v1/rhc/lp-events` | PRO+ | Liquidity **removals** feed — v2/v3 `Burn` + v4 negative `ModifyLiquidity` on tracked pools; `provider_is_token_deployer` = rug tell. Removals by default; `action: "add" \| "pool_created" \| "all"` opts into adds (7 days) and pool creations (server 2026-09-23), with depth fields `in_range` / `active_share` / `share_of_reserves` / `material`; raw uint256 string amounts; filters `token` / `pool` / `provider` / `dex` / `action`, cursor `next_before` |
 
 > **`trader_eoa` is the effective trading account**, not simply `tx.from`. On an ordinary transaction it *is* `tx.from`; when the trade was bundled through ERC-4337 it is the userOp sender (`UserOperationEvent`), never the bundler that relayed it. It is still an EOA either way — on Robinhood Chain a userOp sender is a normal EOA carrying an EIP-7702 delegation. Use `trader` only for the swap-log recipient (the router on aggregated swaps).
 
@@ -248,7 +248,7 @@ const { wallets } = await client.alphaWallets({ classification: "smart_money", m
 
 ## Streaming
 
-Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch on every (re)connect, auto-reconnect with backoff, and heartbeat liveness. Stream tokens **never expire** (since 2026-08-27) — there is no refresh timer; `client.getStreamToken()` returns the same token every call (`expires_at` / `next_refresh_at` are always `null`), and `getStreamToken({ rotate: true })` replaces it (the old one keeps working for 60 s). Ten RHC channels:
+Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch on every (re)connect, auto-reconnect with backoff, and heartbeat liveness. Stream tokens **never expire** (since 2026-08-27) — there is no refresh timer; `client.getStreamToken()` returns the same token every call (`expires_at` / `next_refresh_at` are always `null`), and `getStreamToken({ rotate: true })` replaces it (the old one keeps working for 60 s). Eleven RHC channels:
 
 | Channel | Emits | Tier | Scope |
 |---|---|---|---|
@@ -260,8 +260,18 @@ Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`).
 | `rhc:price_alert:events` | `rhc:price_alert:dip`, `rhc:price_alert:recovery` | PRO+ | user-scoped; event-driven off each trade (a few seconds), not sub-second |
 | `rhc:kol:coordination` | `rhc:kol:coordination` | PRO+ | user-scoped — only **your** rules' fires |
 | `rhc:kol:first_touches` | `rhc:kol:first_touch` | PRO+ | broadcast — ULTRA gates only the first-touch *subscription CRUD*, not this channel |
-| `rhc:token_locks` | `rhc:token_lock` | PRO+ | broadcast — a token lock / vesting contract created on chain |
+| `rhc:token_locks` | `rhc:token_lock` (+ `rhc:token_unlock_upcoming`, `rhc:token_unlock_available` with `filters.lifecycle: true`) | PRO+ | broadcast — a token lock / vesting contract created on chain; opt-in unlock-schedule events (claims / cancels are not observable on RHC) |
 | `rhc:token_prices` | `rhc:token_price` | PRO+ | **address-scoped** — `filters.addresses` required (25 / 100 / 250 per connection); one `snapshot: true` frame per address, then ≤ 1 tick per address per 250 ms with `quality` fresh / stale / unreliable + reason (`RhcTokenPriceTick`); no `seq` / `id` |
+| `rhc:lp_events` | `rhc:lp_event` | **ULTRA+** | broadcast — liquidity `add` / `remove` / `pool_created` on tracked Uniswap v2/v3/v4 pools with `in_range`, `active_share`, `share_of_reserves`, `material` (`RhcLpStreamEvent`); filters `RhcLpEventsFilters`; durable resume |
+
+**Liquidity events and lock schedule (server 2026-09-23).** `rhc:lp_events` frames carry raw `amount0` / `amount1` strings (null on v4 — ModifyLiquidity reports none), the position range and `in_range` / `active_liquidity_delta` / `active_share` for v3/v4 (a share of liquidity at the current price, not of TVL: an out-of-range removal is `active_share: 0`), `share_of_reserves` for v2, and `material: true` for a removal of ≥ 25 %. `in_range` and the active fields are `null` with `active_share_reason: "pool_state_unknown"` when the pool's tick was not known — never guessed. `provider` is usually the router / position manager, not the beneficial owner. No USD field. An invalid filter rejects the channel instead of widening it. On `rhc:token_locks`, `filters.lifecycle: true` adds `rhc:token_unlock_upcoming` (an unlock within 24 h) and `rhc:token_unlock_available` (passed within 30 min — **claimable per the schedule, not claimed**; every frame says `withdrawals_tracked: false`), typed `RhcTokenUnlockScheduleEvent`.
+
+```ts
+const stream = client.stream();
+stream.subscribe({ subId: "rugs", channels: ["rhc:lp_events"], filters: { actions: ["remove"], material_only: true } });
+stream.on("rhc:lp_event", (e) => console.log(e.dex, e.pool, e.action, e.active_share ?? e.share_of_reserves));
+stream.subscribe({ subId: "unlocks", channels: ["rhc:token_locks"], filters: { lifecycle: true, events: ["rhc:token_unlock_upcoming"] } });
+```
 
 > **Deprecated:** `rhc:trades` was never a real channel — 0.4.0 subscribers got a `channels_rejected` warning and silence. The server now accepts it as an alias of `rhc:dex_trades` (and acks it under the canonical name), and the SDK keeps the literal marked `@deprecated` so 0.4.0 code compiles. Use `rhc:dex_trades`.
 

@@ -16,7 +16,10 @@
  * — see `RhcTokenPriceTick`), and the four rule-engine channels
  * (`rhc:copytrade:signals`, `rhc:price_alert:events` — event-driven off each
  * RHC trade, with table polls as a safety net — `rhc:kol:coordination`,
- * `rhc:kol:first_touches`). Same wire protocol as the Solana stream client.
+ * `rhc:kol:first_touches`), `rhc:lp_events` (ULTRA+, liquidity add / remove /
+ * pool_created — see `RhcLpStreamEvent`) and, with `filters.lifecycle: true`
+ * on `rhc:token_locks`, the unlock-schedule events. Same wire protocol as the
+ * Solana stream client.
  *
  * Recovery (v1 resume): the client remembers a cursor `{instance, seq, ts}` —
  * the last frame whose handlers finished — and on every reconnect asks the
@@ -46,6 +49,7 @@ export type StreamChannel =
   | "rhc:kol:first_touches"       // first tracked-KOL buy per token — PRO+, broadcast
   | "rhc:token_locks"             // a token lock / vesting contract created on chain — PRO+
   | "rhc:token_prices"            // per-token price ticks for filters.addresses (snapshot, then ≤1 tick / address / 250 ms, with quality) — PRO+, address-scoped
+  | "rhc:lp_events"               // liquidity adds / removes / pool creations with v3/v4 in-range active-liquidity delta (Phase 3) — ULTRA
   /**
    * @deprecated `rhc:trades` was never a real server channel — 0.4.0 subscribers
    * got a `channels_rejected` warning and silence. The server now accepts it as
@@ -66,6 +70,7 @@ export const STREAM_CHANNELS: readonly StreamChannel[] = [
   "rhc:kol:first_touches",
   "rhc:token_locks",
   "rhc:token_prices",
+  "rhc:lp_events",
 ];
 
 /** Event names delivered on those channels. */
@@ -80,7 +85,10 @@ export type StreamEventName =
   | "rhc:kol:coordination"        // on rhc:kol:coordination
   | "rhc:kol:first_touch"         // on rhc:kol:first_touches
   | "rhc:token_lock"              // on rhc:token_locks
-  | "rhc:token_price";            // on rhc:token_prices (frame.snapshot === true for the per-address snapshot sent on subscribe)
+  | "rhc:token_unlock_upcoming"   // on rhc:token_locks with filters.lifecycle: true — an unlock within 24 h (2026-09-23)
+  | "rhc:token_unlock_available"  // on rhc:token_locks with filters.lifecycle: true — claimable per the schedule, NOT claimed
+  | "rhc:token_price"             // on rhc:token_prices (frame.snapshot === true for the per-address snapshot sent on subscribe)
+  | "rhc:lp_event";               // on rhc:lp_events — add / remove / pool_created (2026-09-23)
 
 // ── Shared stream core ──────────────────────────────────────────────────────
 // Everything below this line is IDENTICAL in the four TypeScript SDKs

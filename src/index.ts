@@ -139,6 +139,13 @@ export type {
   LpEventsParams,
   RhcLpEvent,
   LpEventsResponse,
+  RhcLpAction,
+  RhcLpActiveShareReason,
+  RhcLpStreamEvent,
+  RhcLpEventsFilters,
+  RhcTokenLockLifecycleEventName,
+  RhcTokenLockLifecycleFilters,
+  RhcTokenUnlockScheduleEvent,
   TokenLocksParams,
   TokenLocksResponse,
   TokenLockSummaryParams,
@@ -643,6 +650,10 @@ export class RobinhoodChainX402 {
    * `coverage` block says `adds_persisted: false`). Amounts are raw uint256
    * STRINGS; v4 rows carry `liquidity` only. `provider_is_token_deployer` is
    * the classic rug tell. Cursor via `next_before`. Data since 2026-08-05.
+   * Since 2026-09-23 `action: "add" | "pool_created" | "all"` opts into adds
+   * (kept 7 days) and pool creations (the default stays removals only), and
+   * every row carries the depth fields (`in_range`, `active_share`,
+   * `share_of_reserves`, `material`, …). Live push: WS `rhc:lp_events` (ULTRA+).
    * Tier: **PRO+**. Key mode only (not on the x402 rail). `GET /rhc/lp-events`
    */
   async lpEvents(params?: LpEventsParams): Promise<LpEventsResponse> {
