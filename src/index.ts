@@ -16,7 +16,12 @@
  * Get a free API key (200 req/day, no card) at https://madeonsol.com/pricing.
  */
 import { PaymentBudget, paymentUrl, withinDeadline, type PaymentPolicy } from "./payment-policy.js";
+import { createRecoveringFetch, readPaidResult, x402PaymentErrorFrom, type PaidResultProvenance, type RecoveryOptions } from "./x402-recovery.js";
 export { PaymentPolicyError, type PaymentPolicy, type PaymentProposal } from "./payment-policy.js";
+export {
+  X402PaymentError, readPaidResult, x402RequestHash, recoveryMessage, paymentIdFromProof, classifyPaidResponse,
+  PAYMENT_RECOVERY_HEADER, type PaidResultProvenance, type RecoveryOptions,
+} from "./x402-recovery.js";
 import type {
   KolFeedParams,
   KolFeedResponse,
@@ -311,6 +316,12 @@ export interface RobinhoodChainOptions {
   baseUrl?: string;
   /** Required in keyless mode; binds the merchant and caps signed authorizations. */
   paymentPolicy?: PaymentPolicy;
+  /**
+   * PAY-05 recovery bounds for a paid call whose answer was lost or is pending:
+   * the SAME signed authorization is re-sent with a payer-signed
+   * PAYMENT-RECOVERY header (EIP-191). Never a new payment; no budget use.
+   */
+  recovery?: RecoveryOptions;
 }
 
 /** Decoded PAYMENT-RESPONSE of the last paid call (x402 mode). */
@@ -411,7 +422,14 @@ export class RobinhoodChainX402 {
   /** Authorized/reserved USDG atomic units for this client, including uncertain outcomes. */
   get authorizedAmountAtomic(): string { return this.paymentBudget?.authorizedAmountAtomic ?? "0"; }
   // viem LocalAccount, resolved lazily on first paid call (viem is an optional peer dep).
-  private account: { address: string; signTypedData: (args: unknown) => Promise<string> } | null = null;
+  private account: { address: string; signTypedData: (args: unknown) => Promise<string>; signMessage?: (args: { message: string }) => Promise<string> } | null = null;
+  private recovery?: RecoveryOptions;
+  /**
+   * x402 mode: provenance of the last paid answer (payment id, original vs
+   * deferred, live vs stored replay, paid/generated times, body sha256). A
+   * `deferred` answer was produced AFTER the payment and is not data from paidAt.
+   */
+  lastPaidResult: PaidResultProvenance | null = null;
   /** Last response's rate-limit headers (X-RateLimit-*, X-Request-Id). */
   lastRateLimit: RateLimitInfo = { limit: null, remaining: null, reset: null, requestId: null };
   /** x402 mode: decoded PAYMENT-RESPONSE of the last paid call (settlement tx). */
@@ -435,6 +453,7 @@ export class RobinhoodChainX402 {
       this.paymentBudget = new PaymentBudget(opts.paymentPolicy);
       this.authMode = "x402";
       this.privateKey = opts.privateKey;
+      this.recovery = opts.recovery;
       this.headers = { "User-Agent": `robinhood-chain-x402/${VERSION}` };
     } else {
       console.error(
@@ -510,17 +529,26 @@ export class RobinhoodChainX402 {
           payload: { signature, authorization: { from: account.address, to, value: leg.amount, validAfter: String(validAfter), validBefore: String(validBefore), nonce } },
         };
         // The deadline bounds everything up to SUBMISSION. The signed payment may
-        // settle once sent, so the paid request gets its own bound and its body is
+        // settle once sent, so each paid send gets its own bound and its body is
         // never discarded because the original deadline passed mid-download.
+        // PAY-05: a lost/pending answer is recovered with THIS authorization and
+        // a fresh EIP-191 PAYMENT-RECOVERY signature by the same key — never a
+        // new payment, never a budget reservation (the reservation stays).
         clearTimeout(timer);
-        const paidSignal = AbortSignal.timeout(budget.timeoutMs);
-        const res = await fetch(url.toString(), { headers: { ...this.headers, "PAYMENT-SIGNATURE": b64(JSON.stringify(paymentPayload)) }, redirect: "error", signal: paidSignal });
+        const paid = createRecoveringFetch(fetch, {
+          attemptTimeoutMs: budget.timeoutMs, ...this.recovery, rail: "rhc",
+          sign: async (message) => {
+            if (!account.signMessage) throw new Error("Keyless recovery needs a signer with signMessage (EIP-191)");
+            return account.signMessage({ message });
+          },
+        });
+        const res = await paid(url.toString(), { headers: { ...this.headers, "PAYMENT-SIGNATURE": b64(JSON.stringify(paymentPayload)) }, redirect: "error" });
         const settle = res.headers.get("payment-response");
         if (settle) { try { this.lastPayment = JSON.parse(unb64(settle)); } catch { this.lastPayment = null; } }
+        this.lastPaidResult = readPaidResult(res);
         this.lastRateLimit = { limit: null, remaining: null, reset: null, requestId: res.headers.get("x-request-id") };
         if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          throw new Error(`x402 payment for ${path} rejected (HTTP ${res.status}): ${body.slice(0, 400)}`);
+          throw await x402PaymentErrorFrom(res, (body) => `x402 payment for ${path} rejected (HTTP ${res.status}): ${body.slice(0, 400)}`);
         }
         return await res.json() as T;
       } finally { reservation.release(); }
