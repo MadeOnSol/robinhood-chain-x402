@@ -5,7 +5,7 @@
  * Robinhood Chain is an Arbitrum Orbit L2. Two auth modes:
  *
  *   • **Key mode** — `{ apiKey: "msk_…" }`: Bearer key against every
- *     /api/v1/rhc/… endpoint (54 methods, all tiers, RHC bundled at no extra cost).
+ *     /api/v1/rhc/… endpoint (all tiers, RHC bundled at no extra cost).
  *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…", paymentPolicy }`: an EVM
  *     wallet holding USDG on Robinhood Chain pays per call on the x402 rail
  *     (/api/x402/rhc/…, 10 endpoints, from $0.04). The client handles the
@@ -124,8 +124,12 @@ export type {
   DeployerTier,
   Dex,
   RhcError,
+  RhcLiquidityBasis,
+  RhcTokenRiskSummary,
+  CandleTimeframe,
   KolFeedParams,
   RhcKolTrade,
+  RhcKolScore,
   KolFeedResponse,
   KolLeaderboardPeriod,
   KolLeaderboardParams,
@@ -171,6 +175,8 @@ export type {
   RhcLockCoverage,
   RhcLockFamily,
   RhcLockNextUnlock,
+  RhcLockProvider,
+  RhcLockExplorer,
   TokensSort,
   TokensParams,
   RhcTokenListItem,
@@ -275,6 +281,10 @@ export type {
   RhcPnlCurvePoint,
   RhcClosedPosition,
   RhcOpenPosition,
+  RhcVerifiedOpenPosition,
+  RhcHoldingStatus,
+  RhcHoldingUnverifiedReason,
+  RhcHoldingsSummary,
   RhcWalletPnlNotes,
   RhcWalletPnlResponse,
   RhcWalletPositionsSummary,
@@ -415,7 +425,7 @@ export interface RateLimitInfo {
 export class RobinhoodChainX402 {
   private baseUrl: string;
   private headers: Record<string, string>;
-  /** "key" (msk_ Bearer, all 54 methods) or "x402" (keyless USDG pay-per-call, 10 methods). */
+  /** "key" (msk_ Bearer, every method) or "x402" (keyless USDG pay-per-call, 10 methods). */
   readonly authMode: "key" | "x402";
   private privateKey?: string;
   private paymentBudget?: PaymentBudget;
@@ -874,11 +884,13 @@ export class RobinhoodChainX402 {
    * `entered_still_holding`, `exited` (pre-existing holders whose last Transfer
    * in the window left them at zero) and `net` ≈ Δ `holder_count`; a window is
    * null only when the chain had no ingested trades in it. Tier: **PRO+** (50
-   * rows; ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/holders`
+   * rows; ULTRA/BUSINESS 200). Page with `after` (the previous page's
+   * `next_after` keyset cursor) rather than `offset`.
+   * `GET /rhc/tokens/{address}/holders`
    */
   async tokenHolders(
     address: string,
-    params?: { limit?: number; offset?: number }
+    params?: { limit?: number; offset?: number; after?: string }
   ): Promise<unknown> {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params);
   }
@@ -995,6 +1007,13 @@ export class RobinhoodChainX402 {
    * per-token breakdown, recent trades, and a reputation block (tracked KOL,
    * known deployer + tier, alpha-ranked, dump-cluster membership, early-buyer
    * count). Tier: **PRO+**. `GET /rhc/wallet/{address}`
+   *
+   * FIFO figures (`stats.held_value_eth`, `open_positions`,
+   * `top_tokens[].still_holding`) count DEX buys not matched by a DEX sell;
+   * `holdings` and `top_tokens[].holding_status` check them against the chain
+   * (server 2026-10-02), so a token sent away by transfer is
+   * `TRANSFERRED_OR_DISPOSED`. A contract address answers 404 with
+   * `address_type: "contract"` (the thrown error message carries the body).
    * @param address Wallet EVM address (0x, 40 hex). Case-insensitive.
    */
   async wallet(address: string): Promise<RhcWalletProfileResponse> {
@@ -1019,7 +1038,11 @@ export class RobinhoodChainX402 {
    * FIFO pass as {@link walletPnl} without the curve and closed positions, for
    * clients polling "what is this wallet in right now". Check
    * `positions[].liquidity_basis`: `v4_virtual_ceiling` means `liquidity_usd`
-   * is a bonding-curve ceiling, not withdrawable TVL. Tier: **PRO+**.
+   * is a bonding-curve ceiling, not withdrawable TVL. "Open" is FIFO (a trading
+   * position): since server 2026-10-02 each position also carries
+   * `current_onchain_balance` + `holding_status`, and
+   * `summary.holdings.verified_value_eth` counts proven balances only.
+   * Tier: **PRO+**.
    * `GET /rhc/wallet/{address}/positions`
    * @param address Wallet EVM address (0x, 40 hex).
    */
