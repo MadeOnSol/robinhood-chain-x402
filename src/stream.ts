@@ -57,6 +57,7 @@ export type StreamChannel =
   | "rhc:token_candles"           // live 1-minute candles for filters.addresses (own cap PRO 25 / ULTRA 100 / BUSINESS 250), filters.updates adds the open minute (Phase 4) — PRO+
   | "rhc:token_risk"              // risk-verdict changes + an rhc:risk_verdict snapshot for filters.addresses (Phase 4) — PRO+
   | "rhc:wallet_scores"           // deployer tier changes for filters.wallets (0x deployers) (Phase 4) — PRO+
+  | "rhc:dev_activity"            // the token's recorded developer BUYING / SELLING it (RhcDevActivityEvent); never transfers; ring replay only — ULTRA
   /**
    * @deprecated `rhc:trades` was never a real server channel — 0.4.0 subscribers
    * got a `channels_rejected` warning and silence. The server now accepts it as
@@ -81,6 +82,7 @@ export const STREAM_CHANNELS: readonly StreamChannel[] = [
   "rhc:token_candles",
   "rhc:token_risk",
   "rhc:wallet_scores",
+  "rhc:dev_activity",
 ];
 
 /** Event names delivered on those channels. */
@@ -105,7 +107,8 @@ export type StreamEventName =
   | "rhc:candle_update"           // on rhc:token_candles with filters.updates: true — in-progress minute, a state stream (no id/seq)
   | "rhc:risk_verdict_changed"    // on rhc:token_risk (RhcRiskVerdictChangedEvent)
   | "rhc:risk_verdict"            // on rhc:token_risk — snapshot frame (frame.snapshot === true), the current stored verdict
-  | "rhc:deployer_tier_changed";  // on rhc:wallet_scores (RhcDeployerTierChangedEvent)
+  | "rhc:deployer_tier_changed"   // on rhc:wallet_scores (RhcDeployerTierChangedEvent)
+  | "rhc:dev_activity";           // on rhc:dev_activity — dev_buy / dev_sell only (RhcDevActivityEvent)
 
 // ── Shared stream core ──────────────────────────────────────────────────────
 // Everything below this line is IDENTICAL in the four TypeScript SDKs
@@ -452,6 +455,7 @@ async function resolveWebSocket(override?: unknown): Promise<new (url: string) =
   );
 }
 
+const CONNECTING = 0;
 const OPEN = 1;
 type Frame = Record<string, unknown>;
 type Position = { instance: string | null; seq: number | null; ts: number };
@@ -770,7 +774,8 @@ export class RobinhoodChainStream {
 
   /** Open the connection (also called implicitly by subscribe). Restarts a stream that went `"fatal"`. */
   async connect(): Promise<void> {
-    if (this.connecting || (this.ws && this.ws.readyState === OPEN)) return;
+    // A socket that is still CONNECTING is the connection; opening another would orphan it.
+    if (this.connecting || (this.ws && (this.ws.readyState === CONNECTING || this.ws.readyState === OPEN))) return;
     if (this.stopped) { this.stopped = false; this.authFailures = 0; this.attempt = 0; }
     this.closedByUser = false;
     this.connecting = true;

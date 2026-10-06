@@ -259,6 +259,8 @@ export interface RhcTrade {
   /** Router/aggregator contract (tx.to). */
   router: string | null;
   token_address: string | null;
+  /** 2026-10 — pool-pair attribution state, present only when recorded (`attributed` sets token/action; the others leave them null). */
+  pair_status?: "attributed" | "quote_quote" | "equity_equity" | "unsupported_pair";
   action: TradeAction | null;
   eth_amount: number | null;
   price_native: number | null;
@@ -654,6 +656,77 @@ export interface RhcRiskVerdictSnapshot {
   checked_at:      string | null;
   score_semantics: "higher_is_safer";
   source:          "rhc_token_risk";
+}
+
+/* ── WS `rhc:dev_activity` (ULTRA+) / webhook `rhc:dev_activity` (PRO+) ── */
+
+/**
+ * Robinhood Chain developer activity: the token's RECORDED developer
+ * (`deployer_wallet`, from the launchpad creation or, weaker, the first pool's
+ * creator — see `provenance.attribution`) buying or selling its own token.
+ * Same contract as Solana `dev:activity`, with `chain: "robinhood"`,
+ * `signature` = tx hash, `slot` = block number, `block_time` = chain time and
+ * `quote_amount` = the ETH value of the leg.
+ *
+ * NO-TRANSFER BOUNDARY (v1): only `dev_buy` / `dev_sell` are ever delivered.
+ * A developer moving tokens to another wallet is NOT on this channel, and the
+ * absence of an event is not evidence that no transfer happened. A developer
+ * trading through a different wallet is not linked (no RHC identity builder).
+ * Dedupe on `id` (`dx1:<tx>:<token>:<type>:<actor>`): legs of one tx collapse.
+ */
+export interface RhcDevActivityEvent {
+  id:                  string;
+  v:                   number;
+  type:                "dev_buy" | "dev_sell";
+  chain:               "robinhood";
+  /** Token address (0x, lower-case). */
+  mint:                string;
+  deployer_wallet:     string;
+  actor_wallet:        string;
+  actor_role:          "deployer";
+  action:              "buy" | "sell";
+  /** Transaction hash. */
+  signature:           string;
+  /** Block number. */
+  slot:                number | null;
+  block_time:          string | null;
+  observed_at:         string | null;
+  region:              null;
+  /** Raw uint256 token amount as a decimal string. */
+  token_amount_raw:    string | null;
+  token_decimals:      number | null;
+  token_amount:        number | null;
+  /** ETH value of the leg. */
+  quote_amount:        number | null;
+  quote_mint:          string | null;
+  venue:               string | null;
+  counterparty_wallet: null;
+  counterparty_class:  null;
+  supply_pct:          number | null;
+  identity_evidence:   false;
+  /** true when the trade was re-read by a reconnect catch-up (delivered late). */
+  catchup_replay?:     boolean;
+  provenance: {
+    source:          "rhc_dex_stream";
+    decoder:         "rhc-swap";
+    map_source:      "launchpad" | "pool_creator";
+    /** `creator` (launchpad saw the creation) or `pool_creator` (only the first pool's creator is known — weaker). */
+    attribution:     "creator" | "pool_creator";
+    map_age_ms:      number | null;
+    mode:            "on";
+    /** The developer was resolved after the trade (bounded point read), so the frame is late. */
+    late_classified: boolean;
+  };
+}
+
+/** `rhc:dev_activity` subscribe / webhook filters (all optional, AND). */
+export interface RhcDevActivityFilters {
+  types?:     Array<"dev_buy" | "dev_sell">;
+  /** 0x token addresses (case-insensitive). */
+  addresses?: string[];
+  /** 0x wallets matched against deployer_wallet or actor_wallet. */
+  deployers?: string[];
+  action?:    "buy" | "sell";
 }
 
 /**
@@ -1313,6 +1386,8 @@ export interface RhcBundleSummary {
   fully_exited: boolean;
   buy_volume: number;
   tokens_held: number;
+  /** 2026-10 (COV-23) — `swap_only` = token transfers are not applied: a member that transferred tokens out and sold elsewhere still reads as holding. Absent on older responses. */
+  holdings_basis?: "swap_only" | "swap_and_transfers";
 }
 
 export interface RhcBundleWallet {
@@ -1593,23 +1668,39 @@ export interface RhcCopyTradeSubscription {
   updated_at: string;
   /**
    * Subset of `source_wallets` that are TRACKED Robinhood Chain KOL wallets
-   * (`kol_evm_wallets`, the set behind `/rhc/kol/wallets`). The engine only
-   * evaluates trades of tracked wallets, so only these can ever fire.
+   * (`kol_evm_wallets`, the set behind `/rhc/kol/wallets`). Under
+   * `source_admission: "any_wallet"` (production since 2026-10-04) this is KOL
+   * enrichment only; under the legacy `"kol_only"` engine only these can fire.
+   * @deprecated 2026-10-04, kept and still filled.
    * `null` when the server could not read the reference set (see `warnings`).
    * Added 2026-09-22; absent on older servers.
    */
   source_wallets_tracked?: string[] | null;
-  /** Subset of `source_wallets` that can NEVER fire (not tracked). Use the RHC wallet tracker for arbitrary addresses. */
+  /**
+   * Subset of `source_wallets` NOT in the tracked KOL set. Under
+   * `source_admission: "any_wallet"` these fire like any other wallet; under the
+   * legacy `"kol_only"` engine they never fire.
+   * @deprecated 2026-10-04 — KOL membership is enrichment only; kept and still filled.
+   */
   source_wallets_untracked?: string[] | null;
-  /** Present only when something needs attention — e.g. `untracked_source_wallets`. */
+  /** Present only when something needs attention, e.g. `untracked_source_wallets` (legacy `kol_only` engine only). */
   warnings?: RhcCopyTradeRuleWarning[];
   /**
    * v0.19 (server 2026-10-02) — whether the rule can fire at all, separate from
    * `is_active` (your switch): `eligible` (at least one tracked source wallet),
    * `no_tracked_sources` (kept, but can never fire) or `unknown` (the tracking
    * read failed; never assumed eligible). Absent on older servers.
+   * Server 2026-10-04: under `source_admission: "any_wallet"` any valid source
+   * wallet is followed and the non-eligible states are infrastructure only —
+   * `monitoring_pending` (rule changed after the engine's last load, live within
+   * seconds), `monitoring_unavailable` (engine / trade stream not reporting; it
+   * fires nothing then — see `monitoring_reasons`), `source_capacity_unavailable`.
    */
-  operational_state?: "eligible" | "no_tracked_sources" | "unknown";
+  operational_state?: "eligible" | "monitoring_pending" | "monitoring_unavailable" | "source_capacity_unavailable" | "no_tracked_sources" | "unknown";
+  /** Server 2026-10-04 — which trades the RUNNING engine admits. Absent = unknown (legacy kol_only semantics). */
+  source_admission?: "kol_only" | "any_wallet";
+  /** Server 2026-10-04 — present only with `monitoring_unavailable`: e.g. `dex_stream_stale`, `map_stale`, `engine_state_stale`. */
+  monitoring_reasons?: string[];
 }
 
 export interface RhcCopyTradeRuleWarning {
@@ -1645,14 +1736,14 @@ export interface CopyTradeCreateResponse {
   /** Shown ONCE — null when `delivery_mode` is `websocket`. */
   webhook_secret: string | null;
   note: string;
-  /** Mirror of `subscription.warnings` — present when any source wallet is untracked or the tracking lookup was unavailable. */
+  /** Mirror of `subscription.warnings`: present when any source wallet is untracked (legacy `kol_only` engine only) or the tracking lookup was unavailable. */
   warnings?: RhcCopyTradeRuleWarning[];
 }
 
 export interface CopyTradeGetResponse {
   chain: Chain;
   subscription: RhcCopyTradeSubscription;
-  /** Mirror of `subscription.warnings` — present when any source wallet is untracked or the tracking lookup was unavailable. */
+  /** Mirror of `subscription.warnings`: present when any source wallet is untracked (legacy `kol_only` engine only) or the tracking lookup was unavailable. */
   warnings?: RhcCopyTradeRuleWarning[];
 }
 

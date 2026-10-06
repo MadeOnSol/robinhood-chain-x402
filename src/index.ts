@@ -164,6 +164,8 @@ export type {
   RhcRiskVerdictSnapshot,
   RhcWalletScoresFilters,
   RhcDeployerTierChangedEvent,
+  RhcDevActivityEvent,
+  RhcDevActivityFilters,
   TokenLocksParams,
   TokenLocksResponse,
   TokenLockSummaryParams,
