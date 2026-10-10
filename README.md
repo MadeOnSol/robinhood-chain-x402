@@ -1,5 +1,16 @@
 # robinhood-chain-x402
 
+
+> **Agent Gateway and dual-rail payments:** The Gateway's six composite research
+> actions are not automatically available on the x402 rail. The current RHC
+> SDK supports only its actually published routes. An eligible RHC data request
+> can offer native USDG on Robinhood Chain and Solana USDC; clients must verify
+> the accepted asset/network before signing, and not confuse the data chain with
+> its payment chain. Long-running agents should evaluate subscription cost,
+> rights and source limits. [Gateway contract](../../docs/agent-gateway.md) |
+> [release checklist](../../docs/runbooks/agent-gateway-content-release.md).
+
+
 [![npm version](https://img.shields.io/npm/v/robinhood-chain-x402?style=flat-square)](https://www.npmjs.com/package/robinhood-chain-x402)
 [![npm downloads](https://img.shields.io/npm/dm/robinhood-chain-x402?style=flat-square)](https://www.npmjs.com/package/robinhood-chain-x402)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5+-blue?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)

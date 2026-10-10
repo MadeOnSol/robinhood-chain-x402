@@ -49,6 +49,8 @@ import type {
   CandlesResponse,
   RhcKolConsensusResponse,
   RhcBuyerQualityResponse,
+  RhcTokenIntelligenceParams,
+  RhcTokenIntelligenceResponse,
   RhcBundleResponse,
   DeployerAlertsParams,
   DeployerAlertsResponse,
@@ -202,6 +204,11 @@ export type {
   RhcBuyerQuality,
   RhcBuyerQualityCoverage,
   RhcBuyerQualityResponse,
+  RhcTokenIntelligenceModuleId,
+  RhcTokenIntelligenceModuleStatus,
+  RhcTokenIntelligenceParams,
+  RhcTokenIntelligenceModule,
+  RhcTokenIntelligenceResponse,
   BundleKind,
   RhcBundleSummary,
   RhcBundleWallet,
@@ -812,6 +819,22 @@ export class RobinhoodChainX402 {
    */
   async tokenBuyerQuality(address: string): Promise<RhcBuyerQualityResponse> {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/buyer-quality`);
+  }
+
+  /**
+   * **Staged, not released**: answers HTTP 404 `token_intelligence_not_released`
+   * until the API activates it. Include-scoped token intelligence for terminal
+   * panels. Name every module you render (no default; at most 5 modules and
+   * total cost 8; `holders` is opt-in only). Each module carries its own
+   * `status` (ready / partial_history / unverified / unavailable / timeout), the
+   * source's `as_of`, `provenance` and history coverage; a non-ready module
+   * carries no `data`. The address is answered lowercased; `chain_id` 4663,
+   * `native_asset` ETH. Key mode only (not on the keyless x402 rail). Tier: **PRO+**.
+   * `GET /rhc/tokens/{address}/intelligence`
+   */
+  async tokenIntelligence(address: string, params: RhcTokenIntelligenceParams): Promise<RhcTokenIntelligenceResponse> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/intelligence`,
+      { include: typeof params.include === "string" ? params.include : params.include.join(",") });
   }
 
   /**

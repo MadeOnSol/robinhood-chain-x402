@@ -1359,6 +1359,78 @@ export interface RhcBuyerQualityCoverage {
   earliest_buyers_caveat?: string;
 }
 
+// ── Token intelligence for terminals (STAGED: the route answers 404
+// `token_intelligence_not_released` until TOKEN_INTELLIGENCE_API is activated) ──
+
+/** Panels a terminal can ask for. There is no default set: name every module you render. */
+export type RhcTokenIntelligenceModuleId =
+  | "snapshot" | "risk" | "buyer_quality" | "holders" | "flow" | "kol" | "locks" | "top_traders";
+
+/** Per-module outcome; a non-ready module never carries `data` (a failure is never a zero). */
+export type RhcTokenIntelligenceModuleStatus = "ready" | "partial_history" | "unverified" | "unavailable" | "timeout";
+
+/** Query params for GET /rhc/tokens/{address}/intelligence. */
+export interface RhcTokenIntelligenceParams {
+  /**
+   * Required. Modules as an array or a comma-separated string. Budget: at most
+   * 5 modules and total cost 8 (snapshot 2, risk 2, buyer_quality 2, holders 3,
+   * flow 3, kol 1, locks 1, top_traders 2); over budget is HTTP 400
+   * `include_budget_exceeded` before any read. `holders` is opt-in only.
+   */
+  include: readonly RhcTokenIntelligenceModuleId[] | string;
+}
+
+export interface RhcTokenIntelligenceModule {
+  status: RhcTokenIntelligenceModuleStatus;
+  /** Machine reason for any non-ready status (tier_required, not_found, module_timeout, request_deadline, history_not_verified, not_captured, source_error, ...). */
+  reason: string | null;
+  /** The source's own timestamp; null when the source gives none. Never the request time. */
+  as_of: string | null;
+  provenance: {
+    source: string;
+    chain: string;
+    upstream_status: number | null;
+    cache: "hit" | "miss" | "none";
+  };
+  coverage: {
+    kind: "point_in_time" | "trade_derived";
+    historical_completeness: {
+      threshold: "verified_interval";
+      observed: "verified" | "not_verified" | "unknown";
+      threshold_met: boolean;
+    } | null;
+  };
+  limitations: string[];
+  /** The source endpoint's own body. Absent when unavailable / timed out. */
+  data?: Record<string, unknown>;
+}
+
+/** GET /rhc/tokens/{address}/intelligence — Robinhood Chain (4663), lowercase 0x, ETH-native. */
+export interface RhcTokenIntelligenceResponse {
+  contract_version: 1;
+  chain: "robinhood-chain";
+  chain_id: 4663;
+  /** Lowercased 0x address. */
+  address: string;
+  address_format: "evm_hex";
+  native_asset: "ETH";
+  requested: RhcTokenIntelligenceModuleId[];
+  /** Response assembly time, NOT an observation time (each module has its own `as_of`). */
+  generated_at: string;
+  budget: {
+    cost_used: number;
+    cost_limit: number;
+    max_modules: number;
+    source_reads: number;
+    module_timeout_ms: number;
+    request_deadline_ms: number;
+    concurrency: number;
+  };
+  summary: Record<RhcTokenIntelligenceModuleStatus, number>;
+  /** Only the requested modules are present. */
+  modules: Partial<Record<RhcTokenIntelligenceModuleId, RhcTokenIntelligenceModule>>;
+}
+
 export interface RhcBuyerQualityResponse {
   chain: Chain;
   token_address: string;
