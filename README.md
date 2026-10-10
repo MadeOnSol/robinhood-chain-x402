@@ -267,6 +267,31 @@ for (const ev of events) if (ev.provider_is_token_deployer) console.warn("deploy
 const { wallets } = await client.alphaWallets({ classification: "smart_money", min_memecoin_share: 0.7 });
 ```
 
+## Trading terminal snapshot + WebSocket bridge (**staged SDK helper**)
+
+The new `watchTokenIntelligence()` helper joins an existing RHC Intelligence REST snapshot to token-scoped WebSocket price/risk/candle updates. It **does not** poll the full Intelligence endpoint for every trade.
+
+```ts
+import { RobinhoodChainX402 } from "robinhood-chain-x402";
+const client = new RobinhoodChainX402({ apiKey: process.env.MADEONSOL_API_KEY! });
+const address = process.env.RHC_TOKEN_ADDRESS!;
+const stream = client.stream(); // Share one socket across terminal widgets.
+const widget = client.watchTokenIntelligence(address, {
+  stream, subId: "rhc_panel_1", tier: "PRO",
+  include: ["snapshot", "risk", "flow"], // cost 7, PRO+
+  onChange(view) {
+    console.log({ modules: view.snapshot?.modules, live: view.live.snapshot?.data,
+      stale: view.stale, incomplete: view.incomplete });
+  },
+});
+// widget.dispose() closes only this panel's named subscription.
+// stream.close() after all panels are removed.
+```
+
+Stream gaps and reorgs are not magically reconstructed by a fresh REST read. The controller retains `incomplete` after a gap until you independently verify missing history and acknowledge recovery. A risk event signals a **verdict change during a recheck**, not an ongoing stream of recalculated risk scores. Price ticks update a live overlay; they do not replace an older module's `as_of` or `coverage`. RHC `rhc:dex_trades` is a **broadcast of the broader DEX market, not server-filtered to one token**: it is OFF by default and requires `tier:"ULTRA"` (or BUSINESS/ENTERPRISE) plus `includeRhcFirehose:true`. Similarly, `includeKolBroadcast:true` opts into the global KOL feed. Keyed subscription mode only; keyless x402 cannot open this push stream. Example: `examples/terminal-intelligence-watch.mjs`.
+
+**Publication status:** only the existing keyed `tokenIntelligence()` method is available in the published 0.20.0 SDK. The `watchTokenIntelligence()` helper is staged in [PR #536](https://github.com/MadeOnSol/madeonsol/pull/536) and requires a subsequent reviewed SDK release.
+
 ## Streaming
 
 Managed WebSocket stream over ws-streaming (`wss://madeonsol.com/ws/v1/stream`). Handles the token fetch on every (re)connect, auto-reconnect with backoff, and heartbeat liveness. Stream tokens **never expire** (since 2026-08-27) — there is no refresh timer; `client.getStreamToken()` returns the same token every call (`expires_at` / `next_refresh_at` are always `null`), and `getStreamToken({ rotate: true })` replaces it (the old one keeps working for 60 s). Fourteen RHC channels:

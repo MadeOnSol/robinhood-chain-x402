@@ -101,6 +101,14 @@ import type {
 } from "./types.js";
 
 import { RobinhoodChainStream } from "./stream.js";
+import { createRobinhoodTerminalWatch, type RobinhoodTerminalWatchOptions } from "./terminal.js";
+import type { TerminalTokenView as TerminalTokenViewType } from "./terminal-watch.js";
+export { createRobinhoodTerminalWatch, terminalStreamPort } from "./terminal.js";
+export { createTerminalTokenView, TerminalTokenView } from "./terminal-watch.js";
+export { planTerminalWatch, TERMINAL_MODULE_COSTS } from "./terminal-policy.js";
+export type { RobinhoodTerminalWatchOptions } from "./terminal.js";
+export type { TerminalView, TerminalViewOptions, TerminalStreamPort, TerminalStreamFrame, TerminalSnapshotResponse, TerminalModuleResponse, TerminalPhase } from "./terminal-watch.js";
+export type { TerminalModule, TerminalTier, TerminalWatchPlan } from "./terminal-policy.js";
 import type { StreamClientOptions } from "./stream.js";
 import { VERSION } from "./version.js";
 
@@ -822,8 +830,7 @@ export class RobinhoodChainX402 {
   }
 
   /**
-   * **Staged, not released**: answers HTTP 404 `token_intelligence_not_released`
-   * until the API activates it. Include-scoped token intelligence for terminal
+   * Live since 2026-10-10. Include-scoped token intelligence for terminal
    * panels. Name every module you render (no default; at most 5 modules and
    * total cost 8; `holders` is opt-in only). Each module carries its own
    * `status` (ready / partial_history / unverified / unavailable / timeout), the
@@ -835,6 +842,19 @@ export class RobinhoodChainX402 {
   async tokenIntelligence(address: string, params: RhcTokenIntelligenceParams): Promise<RhcTokenIntelligenceResponse> {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/intelligence`,
       { include: typeof params.include === "string" ? params.include : params.include.join(",") });
+  }
+
+  /**
+   * Realtime terminal integration (opt-in, API key PRO+):
+   * A token-scoped REST intelligence snapshot + bounded WS invalidation.
+   *
+   * Reuse ONE shared stream across widgets, and use a UNIQUE subId per watch:
+   * `const stream = client.stream();`
+   * `const view = client.watchTokenIntelligence(token, { stream, subId: "panel1", tier: "PRO", include: ["snapshot", "risk"] });`
+   * `view.dispose();` detaches only this watch. Close the shared stream separately.
+   */
+  watchTokenIntelligence(address: string, options: RobinhoodTerminalWatchOptions): TerminalTokenViewType {
+    return createRobinhoodTerminalWatch(this, address, options);
   }
 
   /**
