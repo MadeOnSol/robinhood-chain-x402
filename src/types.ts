@@ -34,6 +34,16 @@ export type Dex = "uniswap-v2" | "uniswap-v3" | "uniswap-v4";
 export type RhcLiquidityBasis = "v4_virtual_ceiling" | "measured";
 
 /**
+ * Where `liquidity_usd` comes from (additive, more precise than
+ * `liquidity_basis`): pool_balances = uniswap-v2/v3 balances; v4_virtual_ceiling
+ * = uniswap-v4 ceiling; bonding_curve_reserve = 2x a launchpad curve quote
+ * reserve (pons-v2, flap, hood.fun, bags); unknown_venue = no recognised venue.
+ */
+export type RhcLiquiditySource = "pool_balances" | "v4_virtual_ceiling" | "bonding_curve_reserve" | "unknown_venue";
+/** `unavailable` = liquidity_usd is null (unknown, never zero); `verified_zero` = explicit 0. */
+export type RhcLiquidityStatus = "available" | "verified_zero" | "unavailable";
+
+/**
  * Precomputed risk summary (same engine as `/rhc/tokens/{address}/risk`).
  * `null` means NOT ASSESSED, not safe. A snapshot: always read `checked_at`.
  */
@@ -149,8 +159,13 @@ export interface KolFeedResponse {
 export type KolLeaderboardPeriod = "24h" | "7d" | "30d";
 
 export interface KolLeaderboardParams {
+  /** Activity ranking only (sort "trades"). */
   period?: KolLeaderboardPeriod;
   limit?: number;
+  /** "trades" (default, BASIC) or a FIFO win-rate ranking "winrate_7d" | "winrate_30d" (PRO+). */
+  sort?: "trades" | "winrate_7d" | "winrate_30d";
+  /** Win-rate sorts only: minimum fully closed positions in the window (1-100, default 3). */
+  min_closed?: number;
 }
 
 export interface RhcKolLeaderboardEntry {
@@ -165,13 +180,35 @@ export interface RhcKolLeaderboardEntry {
   net_eth: number;
   tokens_traded: number;
   last_trade_at: string;
+  /**
+   * Win-rate sorts only (sort "winrate_7d" | "winrate_30d"). With those sorts the
+   * activity fields above are NOT returned; rows carry the fields below instead.
+   * Same numbers as `kol(wallet, { include_performance: true })`.
+   */
+  evm_address?: string;
+  status?: "available" | "partial";
+  winrate_7d?: number | null;
+  winrate_30d?: number | null;
+  closed_positions_7d?: number;
+  closed_positions_30d?: number;
+  pnl_7d_eth?: number | null;
+  pnl_30d_eth?: number | null;
+  median_hold_minutes_30d?: number | null;
+  auto_strategy_tag?: "scalper" | "day_trader" | "swing_trader" | "hodler" | null;
+  data_fingerprint?: string | null;
+  computed_at?: string;
 }
 
 export interface KolLeaderboardResponse {
   chain: Chain;
-  period: KolLeaderboardPeriod;
+  /** Activity ranking only. */
+  period?: KolLeaderboardPeriod;
   leaderboard: RhcKolLeaderboardEntry[];
   count: number;
+  /** Win-rate sorts only. */
+  sort?: "winrate_7d" | "winrate_30d";
+  min_closed?: number;
+  scores_meta?: { source: string; fresh_within_minutes: number; definition: string };
 }
 
 /* ── /rhc/kol/hot-tokens ── */
@@ -230,6 +267,38 @@ export interface RhcKolProfileResponse {
   kol_twitter: string | null;
   stats: RhcKolProfileStats;
   trades: RhcKolProfileTrade[];
+  /** Only with `include_performance: true` (PRO+). */
+  performance?: RhcKolPerformance;
+}
+
+export interface RhcKolPerformanceWindow {
+  closed_positions: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  winrate: number | null;
+  realized_pnl_eth: number | null;
+}
+
+/** KOL win rate + strategy from the 90-day FIFO wallet snapshot. Empty windows are null, never 0. */
+export interface RhcKolPerformance {
+  status: "available" | "partial" | "unavailable";
+  /** Set when unavailable: source_error, no_wallet_trades_in_window, no_sized_trades. */
+  reason?: string | null;
+  /** Percent (0-100) of fully closed positions (last sell in window) with positive realized PnL. */
+  winrate_7d?: number | null;
+  winrate_30d?: number | null;
+  closed_positions_7d?: number;
+  closed_positions_30d?: number;
+  pnl_7d_eth?: number | null;
+  pnl_30d_eth?: number | null;
+  windows?: { "7d": RhcKolPerformanceWindow; "30d": RhcKolPerformanceWindow };
+  median_hold_minutes_30d?: number | null;
+  auto_strategy_tag?: "scalper" | "day_trader" | "swing_trader" | "hodler" | null;
+  strategy_reason?: string | null;
+  window_days: number;
+  definition?: string;
+  notes?: Record<string, unknown>;
 }
 
 /* ── /rhc/trades ── */
@@ -1221,6 +1290,8 @@ export interface RhcTokenDetailResponse {
   liquidity_basis: RhcLiquidityBasis;
   /** Constant statement of the uniswap-v4 ceiling semantics. */
   liquidity_note: string;
+  liquidity_source: RhcLiquiditySource;
+  liquidity_status: RhcLiquidityStatus;
   primary_dex: string | null;
   primary_pool: string | null;
   last_trade_time: string | null;
@@ -1442,6 +1513,8 @@ export interface RhcBuyerQualityResponse {
   cohort_selection?: "distinct_first_buy" | "legacy_row_window";
   quality: RhcBuyerQuality;
   coverage: RhcBuyerQualityCoverage;
+  /** 2026-10, only with include_balances=true (PRO+): the dump-cluster early buyers' CURRENT balanceOf; totals only when every member was read. */
+  dump_cluster_held_now?: { cohort_size: number; members: number; held_now: Record<string, unknown>; wallets: Array<{ wallet: string; balance_now: Record<string, unknown> | null }>; note: string };
   /** Present only when buyer data is insufficient. */
   note?: string;
 }
@@ -1478,12 +1551,21 @@ export interface RhcBundleWallet {
   likely_bot?: boolean;
   /** ULTRA only — net position, human-scaled. */
   tokens_held?: number;
+  /** 2026-10, only with include_balances=true: current balanceOf(token) from our node; unverified never means zero. */
+  balance_now?: { status: "verified" | "unverified"; balance_raw: string | null; decimals: number | null; balance: string | null; holding: boolean | null; reason: string | null } | null;
 }
 
 export interface RhcBundleResponse {
   chain: Chain;
   token_address: string;
   bundle: RhcBundleSummary;
+  /** 2026-10, only with include_balances=true (PRO+): balance-based held figures; totals only when complete. */
+  held_now?: {
+    source: "rhc_node_balanceOf_latest"; checked_at: string; wallets: number; verified_wallets: number; holding_wallets: number;
+    complete: boolean; incomplete_reason: string | null; tokens_held_raw: string | null; tokens_held: string | null;
+    /** RATIO in [0, 1] of total_supply_raw. */
+    held_pct_of_supply: number | null; supply_basis: "total_supply_raw" | null;
+  };
   /** Empty for BASIC; top-10 for PRO; full cohort for ULTRA. */
   wallets: RhcBundleWallet[];
 }
@@ -2725,4 +2807,71 @@ export interface StreamToken {
   rotated?: boolean;
   /** Human-readable lifetime statement from the server (e.g. `"never expires"`). */
   lifetime?: string;
+}
+
+/** Filters for the `rhc:token_bundles` channel (all optional, AND-combined; invalid values reject the channel). */
+export interface RhcTokenBundlesFilters {
+  /** Only these 0x token addresses (at most 250, case-insensitive). */
+  addresses?: string[];
+  /** Minimum distinct trading accounts in the cluster (3-50, count at detection). */
+  min_wallets?: number;
+  /** Minimum accounts new to the token (3-50). */
+  min_new_wallets?: number;
+  /** launch = within 5 minutes of the token's first sighting. */
+  phases?: Array<"launch" | "later" | "unknown">;
+  /** Only clusters where one transaction carried 3+ of the buyers. */
+  atomic_only?: boolean;
+  /** Only these event types (default both). */
+  bundle_events?: Array<"rhc:token_bundle_cluster" | "rhc:token_bundle_exit">;
+}
+
+/**
+ * `rhc:token_bundle_cluster` on WS `rhc:token_bundles` (PRO+): one NEW
+ * same-block buy cluster on a Robinhood Chain token, launch or later: >= 3
+ * effective trading accounts (ERC-4337 senders resolved) bought in one block
+ * and >= 3 of them were new to the token. `same_tx_groups` is weaker evidence
+ * than on Solana (a 4337 bundler batches unrelated userOps). Announced once;
+ * evidence, not a verdict. Share held now: `tokenBundleShare()`.
+ */
+export interface RhcTokenBundleClusterEvent {
+  /** bundle_cluster_events row id (dedupe key). */
+  id: number;
+  chain: "robinhood";
+  token_address: string;
+  block_number: number;
+  at: string;
+  minutes_after_launch: number | null;
+  phase: "launch" | "later" | "unknown";
+  launch_at: string | null;
+  wallet_count: number;
+  new_wallets: number;
+  same_tx_groups: number;
+  eth_volume: number | null;
+  /** The token's own leg, raw uint256 as a decimal string. */
+  token_volume_raw: string | null;
+  /** Up to 50 buyer accounts (lowercase). */
+  wallets: string[];
+  detected_at: string;
+}
+
+/**
+ * `rhc:token_bundle_exit` on WS `rhc:token_bundles` (PRO+): an announced
+ * cluster's accounts have sold `threshold_pct` (25 / 50 / 90 / 100) % of what
+ * they bought IN the cluster, each threshold once. Token amounts are the
+ * token's raw uint256 as decimal strings. Only sells by the bundle accounts
+ * themselves, followed for 7 days after detection.
+ */
+export interface RhcTokenBundleExitEvent extends Omit<RhcTokenBundleClusterEvent, "eth_volume" | "token_volume_raw" | "wallets"> {
+  cluster_id: number;
+  cluster_detected_at: string | null;
+  threshold_pct: 25 | 50 | 90 | 100;
+  wallets_tracked: number;
+  wallets_sold: number;
+  wallets_exited: number;
+  bought_tokens_raw: string | null;
+  sold_tokens_raw: string;
+  sold_pct: number | null;
+  realized_eth: number;
+  last_sell_at: string | null;
+  recent_sells: Array<{ wallet: string; tx_id: string; tokens_raw: string | null; eth: number | null; at: string }>;
 }

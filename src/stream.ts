@@ -58,6 +58,7 @@ export type StreamChannel =
   | "rhc:token_risk"              // risk-verdict changes + an rhc:risk_verdict snapshot for filters.addresses (Phase 4) — PRO+
   | "rhc:wallet_scores"           // deployer tier changes for filters.wallets (0x deployers) (Phase 4) — PRO+
   | "rhc:dev_activity"            // the token's recorded developer BUYING / SELLING it (RhcDevActivityEvent); never transfers; ring replay only — ULTRA
+  | "rhc:token_bundles"           // every NEW same-block buy cluster on any token, launch or later (optional filters.addresses, min_wallets, min_new_wallets, phases, atomic_only) — PRO+
   /**
    * @deprecated `rhc:trades` was never a real server channel — 0.4.0 subscribers
    * got a `channels_rejected` warning and silence. The server now accepts it as
@@ -83,6 +84,7 @@ export const STREAM_CHANNELS: readonly StreamChannel[] = [
   "rhc:token_risk",
   "rhc:wallet_scores",
   "rhc:dev_activity",
+  "rhc:token_bundles",
 ];
 
 /** Event names delivered on those channels. */
@@ -108,7 +110,9 @@ export type StreamEventName =
   | "rhc:risk_verdict_changed"    // on rhc:token_risk (RhcRiskVerdictChangedEvent)
   | "rhc:risk_verdict"            // on rhc:token_risk — snapshot frame (frame.snapshot === true), the current stored verdict
   | "rhc:deployer_tier_changed"   // on rhc:wallet_scores (RhcDeployerTierChangedEvent)
-  | "rhc:dev_activity";           // on rhc:dev_activity — dev_buy / dev_sell only (RhcDevActivityEvent)
+  | "rhc:dev_activity"            // on rhc:dev_activity — dev_buy / dev_sell only (RhcDevActivityEvent)
+  | "rhc:token_bundle_cluster"    // on rhc:token_bundles — one new coordinated buy cluster (RhcTokenBundleClusterEvent)
+  | "rhc:token_bundle_exit";      // on rhc:token_bundles — that cluster sold 25/50/90/100 % of its cluster buy (RhcTokenBundleExitEvent)
 
 // ── Shared stream core ──────────────────────────────────────────────────────
 // Everything below this line is IDENTICAL in the four TypeScript SDKs
@@ -499,6 +503,8 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  * Fallback classification for servers that send no `retryable` flag: reasons
  * asking again can never fill.
  */
+/** Snapshot-then-update channels: a resume re-sends their state, so their `state_stream` gap is never a history gap. */
+const STATE_STREAM_CHANNELS = new Set(["token:prices", "rhc:token_prices"]);
 const PERMANENT_GAPS = new Set(["not_reconstructable", "state_stream", "window_exceeded", "ring_truncated", "instance_changed"]);
 /** The server's transient list — a channel with one of these is worth asking again. */
 const TRANSIENT_GAPS = new Set(["backpressure", "closed", "source_busy", "source_error", "late_ingest_possible", "row_cap"]);
@@ -1055,8 +1061,9 @@ export class RobinhoodChainStream {
       const chs = end.channels;
       if (chs && typeof chs === "object") {
         for (const [ch, raw] of Object.entries(chs as Record<string, unknown>)) {
-          // token:prices is a state stream: the server re-sends a snapshot, never a log.
-          if (ch === "token:prices") continue;
+          // Price channels are state streams: the server re-sends a snapshot, never a log.
+          // Named subscriptions key them `<sub_id>/<channel>`, so strip the prefix first.
+          if (STATE_STREAM_CHANNELS.has(ch.slice(ch.lastIndexOf("/") + 1))) continue;
           const info = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
           const gap = info.gap;
           const late = info.late_ingest_possible === true;

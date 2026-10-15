@@ -107,7 +107,7 @@ export { createRobinhoodTerminalWatch, terminalStreamPort } from "./terminal.js"
 export { createTerminalTokenView, TerminalTokenView } from "./terminal-watch.js";
 export { planTerminalWatch, TERMINAL_MODULE_COSTS } from "./terminal-policy.js";
 export type { RobinhoodTerminalWatchOptions } from "./terminal.js";
-export type { TerminalView, TerminalViewOptions, TerminalStreamPort, TerminalStreamFrame, TerminalSnapshotResponse, TerminalModuleResponse, TerminalPhase } from "./terminal-watch.js";
+export type { TerminalView, TerminalViewOptions, TerminalStreamPort, TerminalStreamFrame, TerminalSnapshotResponse, TerminalModuleResponse, TerminalPhase, TerminalContinuityStatus, TerminalContinuity } from "./terminal-watch.js";
 export type { TerminalModule, TerminalTier, TerminalWatchPlan } from "./terminal-policy.js";
 import type { StreamClientOptions } from "./stream.js";
 import { VERSION } from "./version.js";
@@ -175,6 +175,9 @@ export type {
   RhcWalletScoresFilters,
   RhcDeployerTierChangedEvent,
   RhcDevActivityEvent,
+  RhcTokenBundlesFilters,
+  RhcTokenBundleClusterEvent,
+  RhcTokenBundleExitEvent,
   RhcDevActivityFilters,
   TokenLocksParams,
   TokenLocksResponse,
@@ -659,6 +662,21 @@ export class RobinhoodChainX402 {
   }
 
   /**
+   * Scout leaderboard (PRO+): KOLs whose first touches (a buy of a token no KOL
+   * bought before) drew other KOLs within 4 h, over the last 30 days. Identity
+   * is the KOL, not the address; scout_tier null below 30 first touches.
+   * `GET /rhc/kol/scouts/leaderboard`
+   */
+  async kolScoutLeaderboard(params?: {
+    limit?: number;
+    scout_tier?: "S" | "A" | "B" | "C";
+    sort?: "scout_score" | "n_first_touches_30d" | "swarm_3plus_pct" | "swarm_5plus_pct" | "avg_followers_4h";
+    min_first_touches?: number;
+  }): Promise<unknown> {
+    return this.request("/rhc/kol/scouts/leaderboard", params as Record<string, QueryValue>);
+  }
+
+  /**
    * Consensus tokens — bought by 2+ distinct tracked KOLs inside the window.
    * Tier: **BASIC**. `GET /rhc/kol/hot-tokens`
    */
@@ -670,9 +688,11 @@ export class RobinhoodChainX402 {
    * Single KOL profile — aggregate stats over one KOL's last 200 RHC trades plus
    * their 50 most recent trades. Tier: **BASIC**. `GET /rhc/kol/{wallet}`
    * @param wallet KOL EVM wallet address (0x, 40 hex).
+   * @param params `include_performance: true` (PRO+) adds `performance`: 7d/30d
+   *   win rate, realized PnL and strategy classification from the FIFO wallet snapshot.
    */
-  async kol(wallet: string): Promise<RhcKolProfileResponse> {
-    return this.request(`/rhc/kol/${encodeURIComponent(wallet)}`);
+  async kol(wallet: string, params?: { include_performance?: boolean }): Promise<RhcKolProfileResponse> {
+    return this.request(`/rhc/kol/${encodeURIComponent(wallet)}`, params as Record<string, QueryValue> | undefined);
   }
 
   /**
@@ -825,8 +845,8 @@ export class RobinhoodChainX402 {
    * dump-cluster ensemble. Tier: **BASIC**.
    * `GET /rhc/tokens/{address}/buyer-quality`
    */
-  async tokenBuyerQuality(address: string): Promise<RhcBuyerQualityResponse> {
-    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/buyer-quality`);
+  async tokenBuyerQuality(address: string, params?: { /** PRO+: dump_cluster_held_now from balanceOf on our node */ include_balances?: boolean }): Promise<RhcBuyerQualityResponse> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/buyer-quality`, params as Record<string, QueryValue>);
   }
 
   /**
@@ -863,15 +883,27 @@ export class RobinhoodChainX402 {
    * tier: BASIC scalar `bundle`; PRO top-10 wallets; ULTRA full cohort with
    * identity. Tier: **BASIC**. `GET /rhc/tokens/{address}/bundle`
    */
-  async tokenBundle(address: string): Promise<RhcBundleResponse> {
-    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/bundle`);
+  /** ONE figure: share of supply held now by all bundle wallets (launch ∪ clusters), cached 30 s (PRO+). GET /rhc/tokens/{address}/bundle-share */
+  async tokenBundleShare(address: string, params?: { window?: "1h" | "6h" | "24h"; min_wallets?: number }): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/bundle-share`, params as Record<string, QueryValue>);
+  }
+
+  /** Every coordinated buy cluster in a window, launch AND later (PRO+). GET /rhc/tokens/{address}/bundles */
+  async tokenBundleClusters(address: string, params?: { window?: "1h" | "6h" | "24h"; min_wallets?: number; limit?: number; include_balances?: boolean }): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/bundles`, params as Record<string, QueryValue>);
+  }
+
+  async tokenBundle(address: string, params?: { /** PRO+: held_now from balanceOf on our node */ include_balances?: boolean }): Promise<RhcBundleResponse> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/bundle`, params as Record<string, QueryValue>);
   }
 
   /**
    * Top traders of one token, ranked by REALIZED ETH flow (`sell − buy`),
    * enriched with wallet reputation, dump-cluster membership and early-buyer
    * rank. **`net_eth` is not PnL** — it does not value a trader's remaining bag,
-   * so a wallet that bought and still holds ranks last. Tier: **PRO+** (50 rows;
+   * so a wallet that bought and still holds ranks last. Each trader also carries
+   * `fifo` (FIFO realized PnL on this token, the `/rhc/wallet/{address}/pnl`
+   * method; null unless `fifo_status` is `ok`). Tier: **PRO+** (50 rows;
    * ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/top-traders`
    */
   async tokenTopTraders(
@@ -935,9 +967,9 @@ export class RobinhoodChainX402 {
    */
   async tokenHolders(
     address: string,
-    params?: { limit?: number; offset?: number; after?: string }
+    params?: { limit?: number; offset?: number; after?: string; include_wallet_flags?: boolean }
   ): Promise<unknown> {
-    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params);
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params as Record<string, QueryValue> | undefined);
   }
 
   /* ── Deployer hunter ── */
@@ -979,7 +1011,7 @@ export class RobinhoodChainX402 {
   }
 
   /** Full token-deploy history for a deployer. Tier: BASIC. `GET /rhc/deployer-hunter/{address}/tokens` */
-  async deployerTokens(address: string, params?: { limit?: number; offset?: number; sort?: "first_seen_at" | "peak_mc_usd" }): Promise<unknown> {
+  async deployerTokens(address: string, params?: { limit?: number; offset?: number; sort?: "first_seen_at" | "peak_mc_usd"; include_launches_24h?: boolean }): Promise<unknown> {
     return this.request(`/rhc/deployer-hunter/${encodeURIComponent(address)}/tokens`, params as Record<string, QueryValue>);
   }
 
@@ -1013,8 +1045,29 @@ export class RobinhoodChainX402 {
     return this.send("POST", "/rhc/tokens/batch/buyer-quality", { addresses });
   }
 
-  /** First buyers of a token, ranked, with still-holding status. Tier: PRO+. `GET /rhc/tokens/{address}/early-buyers` */
-  async tokenEarlyBuyers(address: string, params?: { limit?: number }): Promise<unknown> {
+  /** Every stored KOL trade on one token, newest first (keyset paged with
+   * next_cursor). include_balances (PRO+): current balanceOf(token) per KOL
+   * address on the page from our node; a failed read is unverified, never 0.
+   * GET /rhc/tokens/{address}/kol-trades */
+  async tokenKolTrades(address: string, params?: { limit?: number; action?: "buy" | "sell"; kol?: string; since?: string; cursor?: string; include_balances?: boolean }): Promise<unknown> {
+    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/kol-trades`, params as Record<string, QueryValue>);
+  }
+
+  /** A developer's launches and own-token buys/sells as one timeline (PRO+).
+   * event_id equals the rhc:dev_activity WS id. Transfers and linked wallets are
+   * not included (coverage block). GET /rhc/deployer-hunter/{address}/activity */
+  async deployerActivity(address: string, params?: { limit?: number; since?: string; types?: string; cursor?: string }): Promise<unknown> {
+    return this.request(`/rhc/deployer-hunter/${encodeURIComponent(address)}/activity`, params as Record<string, QueryValue>);
+  }
+
+  /** First buyers of a token, ranked, with evidence-gated holding status (PRO+).
+   * verify_current_balances: ULTRA+ opt-in for ≤20 pinned-block Hood balanceOf
+   * reads, strict 503 on any missing buyer balance/stat; no added RPC by default.
+   * "realized_eth" remains observed net ETH flow, NOT certified FIFO PnL.
+   * include_scout_scores: adds is_kol + scout_score per buyer, each KOL's score
+   * as of its own first buy (no hindsight).
+   * GET /rhc/tokens/{address}/early-buyers */
+  async tokenEarlyBuyers(address: string, params?: { limit?: number; verify_current_balances?: boolean; include_scout_scores?: boolean }): Promise<unknown> {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/early-buyers`, params as Record<string, QueryValue>);
   }
 
