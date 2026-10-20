@@ -847,7 +847,7 @@ export interface RhcDeployerTierChangedEvent {
 
 export type RhcLockFamily =
   | "pinklock" | "teamfinance" | "teamfinance-nft" | "uncx-v2-lp" | "uncx-v3-lp" | "uncx-vesting" | "vesting-fork"
-  | "goplus" | "titan" | "titan-position" | "titan-vesting" | "hoodlock" | "hoodlock-vesting" | "sablier";
+  | "goplus" | "titan" | "titan-position" | "titan-vesting" | "hoodlock" | "hoodlock-vesting" | "sablier" | "stonkbrokers-vesting";
 export type RhcLockKind = "lock" | "vesting";
 export type RhcLockSubject = "token" | "lp";
 export type RhcLockStatus = "active" | "completed";
@@ -2872,6 +2872,9 @@ export interface RhcTokenBundleExitEvent extends Omit<RhcTokenBundleClusterEvent
   sold_tokens_raw: string;
   sold_pct: number | null;
   realized_eth: number;
+  /** 2026-10 (migration 511) — "incomplete" when a recorded sell has unknown proceeds: its tokens count in sold_pct, its proceeds are not in realized_eth (never 0). null = not measured. */
+  realized_status?: "complete" | "incomplete" | null;
+  unknown_proceeds_sells?: number | null;
   last_sell_at: string | null;
   recent_sells: Array<{ wallet: string; tx_id: string; tokens_raw: string | null; eth: number | null; at: string }>;
 }
