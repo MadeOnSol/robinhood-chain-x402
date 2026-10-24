@@ -21,6 +21,64 @@ export type TradeAction = "buy" | "sell";
  */
 export type DeployerTier = "elite" | "good" | "neutral" | "spammer";
 
+/** Deployer Hunter v2 (additive): every field below is present only when the
+ *  server runs RHC_DEPLOYER_REPUTATION=v2. The default v1 response keeps the
+ *  published v1 fields and omits these. */
+/** Deployer Hunter v2 reputation summary embedded next to tokens / alerts. */
+export interface RhcDeployerReputationSummary {
+  tier: DeployerTier | null;
+  /** "v2.0" (or "v1" only during an operator rollback). */
+  rule_version: string | null;
+  resolved_launches: number | null;
+  organic_runners: number | null;
+  /** Organic runner rate over the last 10 resolved launches. */
+  recent_rate: number | null;
+  survival_1h_rate: number | null;
+  /** Launches behind survival_1h_rate. */
+  survival_sample: number | null;
+  manipulation_status: "none" | "suspected" | "manipulated" | null;
+  confidence: "high" | "medium" | "low" | null;
+}
+
+/** Deployer Hunter v2 per-launch outcome; null until the token is scored. */
+export interface RhcTokenOutcome {
+  rule_version: string | null;
+  launched_at: string | null;
+  detected_at: string | null;
+  /** Market cap at detection: the only base a since-detected multiple may use. */
+  detected_mc_usd: number | null;
+  /** Seconds between contract creation and detection. */
+  detection_delay_s: number | null;
+  resolved: boolean | null;
+  reached_100k: boolean | null;
+  durable_runner: boolean | null;
+  organic_runner: boolean | null;
+  independent_traders: number | null;
+  survived_1h: boolean | null;
+  risk_status: "safe" | "unsafe" | "unknown" | null;
+  manipulation_flags: string[];
+  manipulation_confidence: number | null;
+  confidence: "high" | "medium" | "low" | null;
+}
+
+/** v2-only reputation fields on a full deployer object (additive, optional). */
+export interface RhcDeployerV2Fields extends Partial<Omit<RhcDeployerReputationSummary, "tier">> {
+  lifetime_rate?: number | null;
+  recent_resolved?: number | null;
+  recent_organic?: number | null;
+  recent_results?: Array<{ token: string; organic: boolean | null; peak_mc_usd: number | null; survived_1h: boolean | null }> | null;
+  independent_traders_median?: number | null;
+  manipulation_confidence?: number | null;
+  unsafe_recent_share?: number | null;
+  cohort_7777_share?: number | null;
+  instant_bundled_share?: number | null;
+  history_days?: number | null;
+  coverage?: Record<string, unknown> | null;
+  computed_at?: string | null;
+  /** v2 gate codes explaining the tier (empty for elite; non_human_creator:<kind> for non-person creators). */
+  tier_reasons?: string[] | null;
+}
+
 /** Uniswap DEX versions live on Robinhood Chain. */
 export type Dex = "uniswap-v2" | "uniswap-v3" | "uniswap-v4";
 
@@ -827,7 +885,11 @@ export interface RhcDeployerTierChangedEvent {
   tier_before:      DeployerTier | null;
   tier_after:       DeployerTier | null;
   first_appearance: boolean;
-  /** null when the deployer left the matview. */
+  /**
+   * @deprecated v1 stats from the v1 rollup `mv_rhc_deployers` ($40K / $100K all-time
+   * peak milestones). Kept with its v1 meaning after the Deployer Hunter v2 cutover;
+   * it does not set the v2 tier, read `stats_v2`. null when the deployer has no v1 row.
+   */
   stats: {
     tokens_deployed:  number | null;
     graduated:        number | null;
@@ -839,8 +901,24 @@ export interface RhcDeployerTierChangedEvent {
     last_deploy_at:   string | null;
   } | null;
   computed_at: string;
+  /** "recomputed at T by a periodic refresh" (v1 and v2 alike); where the tier came from is `tier_source`. */
   source:      "matview_refresh";
+  /** The rollup `stats` is read from. */
   matview:     "mv_rhc_deployers";
+  /** Deployer Hunter v2 events only (after the cutover): "v2.0". Absent on v1 events. */
+  rule_version?: "v2.0";
+  /** v2 only: the table the tier was computed from. */
+  tier_source?: "rhc_deployer_reputation_v2";
+  /** v2 only: the v2 facts behind the tier. null when the deployer left the v2 ranking. */
+  stats_v2?: {
+    tokens_deployed:     number | null;
+    resolved_launches:   number | null;
+    organic_runners:     number | null;
+    lifetime_rate:       number | null;
+    recent_rate:         number | null;
+    manipulation_status: "none" | "suspected" | "manipulated" | null;
+    first_deploy_at:     string | null;
+  } | null;
 }
 
 /* ── /rhc/tokens/locks · /rhc/tokens/{address}/locks · /rhc/tokens/unlocks ── */
@@ -1225,14 +1303,19 @@ export interface EquitiesResponse {
 /** v1.x (audit 2026-09-21) — the creator is returned whenever the token row names it;
  *  reputation fields are null until the reputation view has a row (history_status
  *  "pending") or when that lookup failed ("unavailable"). */
-export interface RhcTokenDeployer {
+export interface RhcTokenDeployer extends Partial<Omit<RhcDeployerReputationSummary, "tier">> {
   address: string;
   tier: DeployerTier | null;
   tokens_deployed: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   graduation_rate: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runner_rate: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runners: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   best_peak_mc_usd: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   launchpads: string[] | null;
   identity_status?: "known";
   history_status?: "computed" | "pending" | "unavailable";
@@ -1577,7 +1660,14 @@ export type DeployerLeaderboardSort =
   | "runner_rate"
   | "tokens_deployed"
   | "best_peak_mc_usd"
-  | "last_deploy_at";
+  | "last_deploy_at"
+  /** Accepted only when the server runs RHC_DEPLOYER_REPUTATION=v2. */
+  | "recent_rate"
+  | "lifetime_rate"
+  | "organic_runners"
+  | "resolved_launches"
+  | "survival_1h_rate"
+  | "independent_traders_median";
 
 /** GET /rhc/deployer-hunter/alerts — tracked-deployer launch alerts (0.7.0). */
 export interface DeployerAlertsParams {
@@ -1639,20 +1729,23 @@ export interface DeployerLeaderboardParams {
   offset?: number;
 }
 
-export interface RhcDeployer {
+export interface RhcDeployer extends RhcDeployerV2Fields {
   deployer_address: string;
   tokens_deployed: number;
-  /** Tokens that reached a $40K+ peak MC (the graduation milestone). */
+  /** Tokens that reached a $40K+ peak MC (the graduation milestone). @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   graduated: number;
-  /** graduated ÷ tokens_deployed. */
+  /** graduated ÷ tokens_deployed. @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   graduation_rate: number;
-  /** Tokens that peaked ≥ $100K MC. */
+  /** Tokens that peaked ≥ $100K MC. @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runners: number;
-  /** runners ÷ tokens_deployed. */
+  /** runners ÷ tokens_deployed. @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runner_rate: number;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   best_peak_mc_usd: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   launchpads: string[];
   first_deploy_at: string | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   last_deploy_at: string | null;
   /** elite/good = `runner_rate` ($100K) + 24h of history; spammer = $40K `graduation_rate`. */
   tier: DeployerTier;
@@ -1660,6 +1753,11 @@ export interface RhcDeployer {
 
 export interface DeployerLeaderboardResponse {
   chain: Chain;
+  /** v2 only. */
+  rule_version?: string;
+  sort?: string;
+  sort_requested?: string;
+  sort_note?: string;
   deployers: RhcDeployer[];
   total: number;
   limit: number;
@@ -1669,17 +1767,23 @@ export interface DeployerLeaderboardResponse {
 
 /* ── /rhc/deployer-hunter/{address} ── */
 
-export interface RhcDeployerProfile {
+export interface RhcDeployerProfile extends RhcDeployerV2Fields {
   deployer_address: string;
   tokens_deployed: number;
   curve_tokens: number;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   graduated: number;
   bonding_rate: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runners: number;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   runner_rate: number;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   best_peak_mc_usd: number | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   launchpads: string[];
   first_deploy_at: string | null;
+  /** @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   last_deploy_at: string | null;
   /** elite/good = `runner_rate` ($100K) + 24h of history; spammer = $40K `graduation_rate`. */
   tier: DeployerTier;
@@ -1697,6 +1801,8 @@ export interface RhcDeployerRecentToken {
   market_cap_usd: number | null;
   peak_mc_usd: number | null;
   peak_mc_at: string | null;
+  /** v2 only: per-launch outcome (null until scored). */
+  outcome?: RhcTokenOutcome | null;
 }
 
 export interface RhcDeployerProfileResponse {
@@ -1708,6 +1814,25 @@ export interface RhcDeployerProfileResponse {
   recent_tokens: RhcDeployerRecentToken[];
   /** Rows returned (capped at 50) — the true total is deployer.tokens_deployed. */
   recent_tokens_count: number;
+  /**
+   * Deployer Hunter v2 only (rhc/049): absent in the default v1 response.
+   * `null` = NOT MEASURED (unavailable or not enabled yet); it never means dormant.
+   */
+  activity?: RhcDeployerActivity | null;
+}
+
+/** Whether the deployer is launching now. Never changes the tier. */
+export interface RhcDeployerActivity {
+  /** active: last counted launch within window_days; dormant: older; no_launches: none counted. */
+  state: "active" | "dormant" | "no_launches";
+  /** Null only when state is "no_launches". */
+  last_launch_at: string | null;
+  days_since_last_launch: number | null;
+  launches_7d: number;
+  launches_30d: number;
+  /** 7 */
+  window_days: number;
+  as_of: string | null;
 }
 
 /* ── /rhc/alpha-wallets ── */
@@ -2420,7 +2545,11 @@ export interface RhcWalletFlags {
   is_deployer: boolean;
   deployer_tier: DeployerTier | null;
   deployer_tokens: number | null;
+  /** v1 runner rate; null when the server runs RHC_DEPLOYER_REPUTATION=v2. @deprecated Deployer Hunter v1 metric, kept with its v1 meaning and value (also after the v2 cutover); it does not set the v2 tier. Use organic_runners / resolved_launches / lifetime_rate / recent_rate. */
   deployer_runner_rate: number | null;
+  /** Additive (v2 only, else null): organic durable runners / resolved launches. */
+  deployer_organic_runner_rate?: number | null;
+  deployer_resolved_launches?: number | null;
   is_alpha_tracked: boolean;
   alpha_win_rate: number | null;
   alpha_net_eth: number | null;
