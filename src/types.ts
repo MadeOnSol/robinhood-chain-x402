@@ -331,6 +331,10 @@ export interface RhcKolProfileResponse {
 
 export interface RhcKolPerformanceWindow {
   closed_positions: number;
+  /** Closed positions with a proven outcome: the win-rate denominator. */
+  closed_positions_known?: number;
+  /** Closed positions without a proven cost basis: no verdict, not in winrate. */
+  unknown_outcomes?: number;
   wins: number;
   losses: number;
   breakeven: number;
@@ -493,6 +497,8 @@ export interface RhcLpEvent {
   active_liquidity_delta?: string | null;
   /** |active delta| / active liquidity before (v3/v4); 0 out of range; adds can exceed 1. */
   active_share?: number | null;
+  /** Why active_share is null (rhc/054; same vocabulary as the WS frame); null = active_share present. */
+  active_share_reason?: RhcLpActiveShareReason | null;
   /** v2 only: amount / reserve before (from the pair's Sync). */
   share_of_reserves?: number | null;
   /** true = a removal of ≥ 25 % of reserves / active liquidity; null for adds, creations and unknown shares. */
@@ -512,7 +518,7 @@ export interface LpEventsResponse {
 /* ── WS `rhc:lp_events` (ULTRA+, 2026-09-23) ── */
 
 /** Why `active_share` is null / not the relevant share. */
-export type RhcLpActiveShareReason = "pool_created" | "not_concentrated" | "pool_state_unknown" | "no_active_liquidity";
+export type RhcLpActiveShareReason = "pool_created" | "not_concentrated" | "pool_state_unknown" | "active_liquidity_unknown" | "no_active_liquidity";
 
 /**
  * `rhc:lp_event` frame `data` (channel `rhc:lp_events`, ULTRA / BUSINESS).
@@ -1885,7 +1891,7 @@ export interface RhcAlphaWallet {
   tokens: number;
   buy_eth: number;
   sell_eth: number;
-  /** Realized net flow (sell − buy). */
+  /** Observed ETH flow (sell − buy), not FIFO profit. */
   net_eth: number;
   win_rate: number | null;
   /** Share of trades in launchpad memecoins (vs tokenized stocks/stables). */
@@ -2590,7 +2596,8 @@ export interface RhcWalletProfileResponse {
   cache_hit: boolean;
 }
 
-export type RhcPositionResult = "win" | "loss" | "breakeven";
+/** unknown = no proven cost basis (a sale beyond the observed buys) or unknown consideration: no ROI, no verdict. */
+export type RhcPositionResult = "win" | "loss" | "breakeven" | "unknown";
 
 export interface RhcWalletPnlSummary {
   realized_eth: number;
@@ -2651,6 +2658,9 @@ export interface RhcWalletPnlResponse {
   chain: Chain;
   address: string;
   window_days: number;
+  /** Realized-PnL completeness: incomplete when a position has no proven cost basis or consideration. */
+  completeness?: "complete" | "incomplete";
+  incomplete_reasons?: Array<"proceeds_unattributed" | "unknown_consideration" | "missing_cost_basis">;
   summary: RhcWalletPnlSummary;
   pnl_curve: RhcPnlCurvePoint[];
   closed_positions: RhcClosedPosition[];

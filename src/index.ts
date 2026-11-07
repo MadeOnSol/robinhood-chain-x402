@@ -901,12 +901,12 @@ export class RobinhoodChainX402 {
   }
 
   /**
-   * Top traders of one token, ranked by REALIZED ETH flow (`sell − buy`),
+   * Wallets ranked by observed ETH flow (`sell − buy`) on one token,
    * enriched with wallet reputation, dump-cluster membership and early-buyer
    * rank. **`net_eth` is not PnL** — it does not value a trader's remaining bag,
    * so a wallet that bought and still holds ranks last. Each trader also carries
-   * `fifo` (FIFO realized PnL on this token, the `/rhc/wallet/{address}/pnl`
-   * method; null unless `fifo_status` is `ok`). Tier: **PRO+** (50 rows;
+   * `fifo.realized_pnl_eth` (profit on sales with an observed earlier buy);
+   * `pnl_coverage` applies only to that profit field. Tier: **PRO+** (50 rows;
    * ULTRA/BUSINESS 200). `GET /rhc/tokens/{address}/top-traders`
    */
   async tokenTopTraders(
@@ -1087,8 +1087,8 @@ export class RobinhoodChainX402 {
   /* ── Smart money ── */
 
   /**
-   * Smart-money wallet ranking — RHC trader wallets ranked by realized on-chain
-   * performance (`net_eth`, `win_rate`, `memecoin_share`, `likely_bot`). Tier:
+   * RHC wallets ranked by observed ETH flow and win-rate heuristics.
+   * `net_eth` is sell-minus-buy flow, not FIFO profit. Tier:
    * **PRO+**. `GET /rhc/alpha-wallets`
    */
   async alphaWallets(params?: AlphaWalletsParams): Promise<AlphaWalletsResponse> {
@@ -1122,11 +1122,11 @@ export class RobinhoodChainX402 {
   }
 
   /**
-   * Full FIFO cost-basis PnL for one RHC wallet over 90 days: realized and
-   * unrealized split, a daily realized curve, every closed position with ROI
-   * and hold time, and every open position marked to the current price. Same
-   * FIFO implementation as the Solana `/wallet/{address}/pnl`, so the two
-   * chains are directly comparable. Tier: **PRO+**.
+   * Trading profit from observed RHC wallet trades over 90 days. Sales match
+   * earlier buys using FIFO, as on Solana. Unrealized figures value recorded
+   * DEX buys not sold in recorded DEX trades; they do not verify current
+   * balances. Use `walletPositions` for on-chain holdings and known-cost value
+   * still held. Tier: **PRO+**.
    * `GET /rhc/wallet/{address}/pnl`
    * @param address Wallet EVM address (0x, 40 hex).
    */
@@ -1135,9 +1135,9 @@ export class RobinhoodChainX402 {
   }
 
   /**
-   * Only what the wallet still holds, marked to the current price — the same
-   * FIFO pass as {@link walletPnl} without the curve and closed positions, for
-   * clients polling "what is this wallet in right now". Check
+   * Open trade positions with current on-chain balance checks — the same
+   * FIFO pass as {@link walletPnl} without the curve and closed positions.
+   * Read `holding_status` and `current_onchain_balance` for what is held. Check
    * `positions[].liquidity_basis`: `v4_virtual_ceiling` means `liquidity_usd`
    * is a bonding-curve ceiling, not withdrawable TVL. "Open" is FIFO (a trading
    * position): since server 2026-10-02 each position also carries

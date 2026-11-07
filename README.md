@@ -28,6 +28,8 @@ RHC coverage is **bundled into every tier at no extra cost** — same API key, s
 
 > **Server update 2026-10-04 (no package change needed): RHC copy-trade rules follow any valid source wallet.** `source_wallets` no longer have to be tracked KOL wallets (`/rhc/kol/wallets`): any valid `0x` wallet fires, KOL membership is optional enrichment, and copy-trade sources do not use Wallet Tracker quota. Each rule reports `source_admission` (`any_wallet`) and `operational_state` (`eligible`, or an infrastructure state `monitoring_pending` / `monitoring_unavailable` / `source_capacity_unavailable`). `source_wallets_tracked` / `source_wallets_untracked`, `no_tracked_sources` and the `untracked_source_wallets` warning are legacy, still filled. Existing rules work without editing. Limits are unchanged: PRO 3 rules × 5 wallets, ULTRA 20 × 50, BUSINESS 100 × 250.
 
+> **New in 0.24.0: known-outcome win rates (types).** `RhcPositionResult` gains `unknown` (no proven cost basis or unknown consideration: no ROI, no verdict). The RHC `/wallet/{address}/pnl` response types gain `completeness` and `incomplete_reasons` (`missing_cost_basis` among them). The KOL performance windows gain `closed_positions_known` (the win-rate denominator) and `unknown_outcomes`; `winrate` = wins / `closed_positions_known` and is null when no closed position has a known outcome. Live on the API since 2026-11-07. Types only.
+
 > **New in 0.23.0: Deployer Hunter v2 types.** Every RHC deployer response type gains the v2 fields as optional additions (`rule_version` "v2.0", `resolved_launches`, `organic_runners`, `lifetime_rate`, `recent_rate`, `recent_results`, `survival_1h_rate` + `survival_sample`, `independent_traders_median`, `manipulation_status` / `manipulation_confidence`, `coverage`, `confidence`, `computed_at`, `tier_reasons`, token `outcome`) plus `RhcDeployerActivity` (`activity` on the deployer profile, `null` = not measured, never dormant). The API serves them after the server-side Deployer Hunter v2 cutover. The v1 fields (`graduated`, `graduation_rate`, `runners`, `runner_rate`, `best_peak_mc_usd`, `launchpads`, `last_deploy_at`, `deployer_runner_rate`) stay in the responses with their v1 meaning and are now marked `@deprecated`. `RhcDeployerTierChangedEvent` keeps its v1 `stats` / `source` / `matview` (deprecated `stats`) and gains optional `rule_version`, `tier_source` and `stats_v2` on v2 events. Types only.
 
 > **New in 0.22.1:** `RhcLockFamily` includes `"stonkbrokers-vesting"` (StonkBrokers Safety Deposit Box vesting), accepted by the API since 2026-10-19. Type only.
@@ -178,7 +180,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 | `tokenKolConsensus(address)` | `/api/v1/rhc/tokens/{address}/kol-consensus` | PRO+ | KOL positioning — buyers vs sellers, exit rate, `net_flow_eth`, median entry MC (ULTRA adds wallet lists) |
 | `tokenBuyerQuality(address)` | `/api/v1/rhc/tokens/{address}/buyer-quality` | BASIC | 0–100 early-buyer quality with bundle-buyer + dump-cluster legs |
 | `tokenBundle(address)` | `/api/v1/rhc/tokens/{address}/bundle` | BASIC | Launch-bundle detection (`same_block`) + how much the cohort still holds |
-| `tokenTopTraders(address, params?)` | `/api/v1/rhc/tokens/{address}/top-traders` | PRO+ | Traders ranked by REALIZED ETH (`sell − buy`) — **not PnL**; a wallet still holding ranks last |
+| `tokenTopTraders(address, params?)` | `/api/v1/rhc/tokens/{address}/top-traders` | PRO+ | Wallets ranked by observed ETH flow (`sell − buy`), **not profit**; `fifo.realized_pnl_eth` is separate and may be partial |
 | `tokenFlow(address, window?)` | `/api/v1/rhc/tokens/{address}/flow` | PRO+ | Net flow split by cohort (kol → bot → dump_cluster → early_buyer → …); positive `net_eth` means that cohort distributed |
 | `tokenPeakHistory(address, params?)` | `/api/v1/rhc/tokens/{address}/peak-history` | PRO+ | Two peaks because they disagree — `peak_mc_usd_recorded` (stored high-water) vs `peak_mc_usd_observed` (candle highs) |
 | `tokenRisk(address)` | `/api/v1/rhc/tokens/{address}/risk` | PRO+ | EVM-native risk computed live on-chain — proxy upgradeability, LP custody, simulated **sellability** (never cached) |
@@ -191,7 +193,7 @@ Every method maps 1:1 to an /api/v1/rhc/… route. Fields are EVM-native. Everyt
 | `deployerLeaderboard(params?)` | `/api/v1/rhc/deployer-hunter/leaderboard` | BASIC | 99k+ deployers ranked by reputation — `graduation_rate` ($40K+ peak MC), `runner_rate` ($100K+) |
 | `deployer(address)` | `/api/v1/rhc/deployer-hunter/{address}` | BASIC | Single deployer profile + 50 most recent tokens (unknown wallets → `is_deployer: false`) |
 | `deployerAlerts(params?)` | `/api/v1/rhc/deployer-hunter/alerts` | BASIC · keyless $0.01 | Launch alerts from tracked (graded) deployers — tier, lifetime bond rate, MC at alert; `since` = polling cursor (feed back `next_since`) |
-| `alphaWallets(params?)` | `/api/v1/rhc/alpha-wallets` | PRO+ | Smart-money wallets ranked by realized performance — `net_eth`, `win_rate`, `memecoin_share`, `likely_bot` |
+| `alphaWallets(params?)` | `/api/v1/rhc/alpha-wallets` | PRO+ | Wallets ranked by observed ETH flow and win-rate heuristics; `net_eth` is not FIFO profit |
 
 ### Rule engines — push, not polling
 
