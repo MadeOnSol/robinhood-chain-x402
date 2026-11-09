@@ -1,6 +1,7 @@
 /**
  * Robinhood Chain KOL feed — the live tape of tracked-KOL buys/sells on chain
- * 4663, attributed via tx.from from our self-hosted node.
+ * 4663, attributed to the effective trading account (tx.from, or the ERC-4337
+ * userOp sender when bundled) from our self-hosted node.
  *
  * Run: MADEONSOL_API_KEY=msk_... npx tsx examples/kol-feed.ts
  */

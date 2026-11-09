@@ -1449,6 +1449,12 @@ export interface CandlesResponse {
   truncated: boolean;
   /** Oldest instant actually searched; equals `from` when the whole window was scanned. */
   covered_from: string | null;
+  /** 2026-11-07: response assembly time. */
+  as_of?: string;
+  /** 2026-11-07: start of the still-open bucket (same UTC grid); candles at or after it will change. */
+  open_bucket_start?: string;
+  /** 2026-11-07: "none" = stored candles only, a missing bucket is never synthesized; a stored candle can have trades = 0. */
+  gap_fill?: "none";
 }
 
 /* ── /rhc/tokens/{address}/kol-consensus ── */
