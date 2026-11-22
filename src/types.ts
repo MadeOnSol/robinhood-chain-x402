@@ -395,6 +395,15 @@ export interface RhcTrade {
   action: TradeAction | null;
   eth_amount: number | null;
   price_native: number | null;
+  /** 2026-11-14 — token quantity: token_amount_raw / 10^token_decimals, else eth_amount / price_native, else null (never zero, never a guess). */
+  token_amount?: number | null;
+  /** 2026-11-14 — exact raw integer of the token leg (uint256 decimal string). */
+  token_amount_raw?: string | null;
+  token_decimals?: number | null;
+  /** 2026-11-14 — the other side of THIS pool swap (WETH/ETH/USDG/VIRTUAL or, on a token-to-token swap, the other token). */
+  quote?: { address: string; symbol: string | null; decimals: number | null } | null;
+  quote_amount_raw?: string | null;
+  quote_decimals?: number | null;
   price_usd: number | null;
   mc_usd_at_trade: number | null;
   /** Effective gas price, gwei. */
@@ -419,6 +428,8 @@ export interface TradesResponse {
   has_more: boolean;
   /** Opaque (block_time, id) keyset cursor — pass back as `before`; null when has_more is false. */
   next_before: string | null;
+  /** Server 2026-11 (data_contract v1): absent on older servers. */
+  data_contract?: DataContract;
 }
 
 /* ── /rhc/lp-events ── */
@@ -752,6 +763,51 @@ export interface RhcRiskVerdict {
  * A first assessment is never an event. Frame id =
  * `rhc:risk_verdict_changed:<event_key>`.
  */
+/** rhc:token_holders (2026-11): why a holder snapshot is not proven complete. Never shown as fresh and complete. */
+export type RhcHolderCoverageReason =
+  | "not_indexed" | "fold_status_unknown" | "supply_mismatch" | "not_reconciled" | "count_not_live"
+  | "fold_lagging" | "fold_stale" | "recon_outdated" | `history_incomplete:${string}`;
+
+/** rhc:token_holders snapshot: on subscribe, after cursor_expired, or after a rebuilt fold (resnapshot). */
+export interface RhcTokenHoldersSnapshot {
+  type: "snapshot";
+  token_address: string;
+  /** resume_throttled: resumes from one connection for one token are limited to one ring read per 5 s; this snapshot replaces the changes */
+  snapshot_reason: "subscribe" | "cursor_expired" | "resnapshot" | "resume_throttled";
+  resnapshot_reason?: string;
+  fold_block: number | null;
+  committed_at: string | null;
+  /** Positive balances excluding liquidity pools and burn addresses (= REST concentration.holder_count). null when not proven (e.g. not_indexed): never 0 holders for an unknown token. */
+  holder_count: number | null;
+  /** fold = counted from the fold in the same read as cursor + top_holders; recon = the older reconciliation count */
+  holder_count_source: "fold" | "recon" | null;
+  holder_count_definition: "positive_balances_excluding_pools_and_burns";
+  holder_count_block: number | null;
+  /** the REST holders page set and order (pools/burns included and flagged); raw-unit decimal strings; empty for not_indexed */
+  top_holders: Array<{ holder: string; balance: string; is_pool: boolean; is_burn: boolean }>;
+  coverage: { status: "complete" | "coverage_incomplete"; reasons: RhcHolderCoverageReason[] };
+  verified: { recon_ok: boolean | null; recon_block: number | null; checked_at: string | null };
+  lag_blocks: number | null;
+  /** resume point: pass it back as filters.cursors[token_address] */
+  cursor: number;
+}
+
+/** rhc:token_holders changes: one frame per committed fold batch (never per Transfer). */
+export interface RhcTokenHoldersChanges {
+  type: "changes";
+  token_address: string;
+  /** balance after the fold (raw-unit decimal string); removed = zero or negative */
+  changes: Array<{ holder: string; balance: string; removed: boolean; is_pool: boolean; is_burn: boolean }>;
+  /** same definition as the snapshot holder_count; null until the live count is seeded */
+  holder_count_after: number | null;
+  fold_block: number;
+  /** when the newest change in this batch committed on our side (latency = receive time - committed_at) */
+  committed_at: string | null;
+  cursor: number;
+}
+
+export type RhcTokenHoldersFrame = RhcTokenHoldersSnapshot | RhcTokenHoldersChanges;
+
 export interface RhcRiskVerdictChangedEvent {
   chain:               Chain;
   token_address:       string;
@@ -1354,7 +1410,30 @@ export interface RhcTokenKolActivity {
   complete?: boolean;
 }
 
+/** Project-published information resolved by token identity across trading venues. */
+export interface TokenProjectMetadata {
+  name: string | null;
+  symbol: string | null;
+  description: string | null;
+  image_url: string | null;
+  website: string | null;
+  twitter: string | null;
+  telegram: string | null;
+  discord: string | null;
+  github: string | null;
+  created_on: string | null;
+  source: string | null;
+  observed_at: string | null;
+  sources: Record<string, { source: string; path: string; observed_at: string }>;
+  metadata: Record<string, unknown> | null;
+  onchain_metadata: Record<string, unknown> | null;
+  additional_documents: Array<{ source: string; metadata: Record<string, unknown> | null; truncated: boolean }>;
+  metadata_truncated: boolean;
+  website_check: { status: string; source?: string; token?: string; observed_at?: string };
+}
+
 export interface RhcTokenDetailResponse {
+  project?: TokenProjectMetadata;
   chain: Chain;
   token_address: string;
   symbol: string | null;
@@ -1572,6 +1651,23 @@ export interface RhcTokenIntelligenceModule {
   limitations: string[];
   /** The source endpoint's own body. Absent when unavailable / timed out. */
   data?: Record<string, unknown>;
+  /**
+   * Server 2026-11-22: present only when the fresh read missed its deadline and this is the LAST real
+   * measurement (status unverified, reason stale_measurement, never ready; as_of === measured_at).
+   */
+  stale?: {
+    /** persisted_measurement (server 2026-11-22, holder_count only): a stored measurement read after the timeout when the server process had none. */
+    served_from: "last_measurement" | "persisted_measurement";
+    measured_at: string;
+    measured_at_basis: "source_as_of" | "received_at";
+    age_seconds: number;
+    source: string;
+    refreshing: boolean;
+    refresh_reason: "module_timeout" | "request_deadline";
+    /** null for persisted_measurement. */
+    previous_status: "ready" | "partial_history" | "unverified" | null;
+    previous_reason: string | null;
+  };
 }
 
 /** GET /rhc/tokens/{address}/intelligence — Robinhood Chain (4663), lowercase 0x, ETH-native. */
@@ -2658,6 +2754,8 @@ export interface RhcWalletPnlNotes {
   trades_unsized: number;
   partial: boolean;
   partial_reason: string;
+  /** Server 2026-11-22: present only when the 3-second answer budget ended the read (never cached). */
+  time_budget?: { budget_ms: number; trades_read: number; complete: false };
 }
 
 export interface RhcWalletPnlResponse {
@@ -2666,13 +2764,27 @@ export interface RhcWalletPnlResponse {
   window_days: number;
   /** Realized-PnL completeness: incomplete when a position has no proven cost basis or consideration. */
   completeness?: "complete" | "incomplete";
-  incomplete_reasons?: Array<"proceeds_unattributed" | "unknown_consideration" | "missing_cost_basis">;
+  /** time_budget (server 2026-11-22): the 3-second answer budget ended the trade read; see notes.time_budget. scope_recent: ?scope=recent covered only the most recent trades. */
+  incomplete_reasons?: Array<"proceeds_unattributed" | "unknown_consideration" | "missing_cost_basis" | "time_budget" | "scope_recent">;
+  /** Server 2026-11-22, ?scope=recent only: the PnL covers the most recent trades (at most trade_cap). */
+  scope?: "recent_trades";
+  trades_used?: number;
+  trade_cap?: number;
+  /** Oldest / newest trade covered (?scope=recent only). */
+  from?: string | null;
+  to?: string | null;
+  /** false = older trades exist or may exist: completeness incomplete + scope_recent, open positions carry pre_scope_cost_basis "unknown". */
+  covers_full_window?: boolean;
+  truncated_by?: "trade_cap" | "time_budget" | null;
+
   summary: RhcWalletPnlSummary;
   pnl_curve: RhcPnlCurvePoint[];
   closed_positions: RhcClosedPosition[];
   open_positions: RhcOpenPosition[];
   notes: RhcWalletPnlNotes;
   cache_hit: boolean;
+  /** Server 2026-11 (data_contract v1): absent on older servers. */
+  data_contract?: DataContract;
 }
 
 export interface RhcOpenPosition {
@@ -3022,4 +3134,186 @@ export interface RhcTokenBundleExitEvent extends Omit<RhcTokenBundleClusterEvent
   unknown_proceeds_sells?: number | null;
   last_sell_at: string | null;
   recent_sells: Array<{ wallet: string; tx_id: string; tokens_raw: string | null; eth: number | null; at: string }>;
+}
+
+/* ── Token top traders (GET /rhc/tokens/{address}/top-traders) ── */
+
+/** Shared evidence vocabulary: verified = proven for this answer; inferred = rule over observed data, not proven complete; unknown = not established (never zero). */
+export type RhcEvidence = "verified" | "inferred" | "unknown";
+
+/** FIFO realized PnL on this token (the /rhc/wallet/{address}/pnl method). Open lots are NOT balances. */
+export interface RhcTopTraderFifo {
+  realized_pnl_eth: number;
+  roi: number | null;
+  cost_basis_matched_eth: number;
+  bought_eth: number;
+  sold_eth: number;
+  /** Tokens sold without an earlier observed buy: never profit. */
+  unmatched_sell_tokens: number;
+  cost_basis_complete: boolean;
+  /** FIFO-open quantity. NOT a verified balance. */
+  fifo_open_tokens: number;
+  open_cost_basis_eth: number;
+  sized_trades: number;
+  unpriced_trades: number;
+  unsized_trades: number;
+}
+
+export interface RhcTopTrader {
+  trader_eoa: string;
+  buy_eth: number | null;
+  sell_eth: number | null;
+  /** Observed sell_eth - buy_eth: cash flow, not profit. */
+  net_eth: number | null;
+  trades: number;
+  last_trade_at: string | null;
+  avg_trade_mc: number | null;
+  win_rate: number | null;
+  likely_bot: boolean | null;
+  is_known_kol: boolean | null;
+  kol_name: string | null;
+  wallet_net_eth: number | null;
+  wallet_tokens: number | null;
+  dump_cohorts: number | null;
+  early_buyer_rank: number | null;
+  /** null when `fifo_status` is not "ok" (never zeros). */
+  fifo: RhcTopTraderFifo | null;
+  pnl_coverage: "complete" | "partial" | "unavailable";
+  /** Server 2026-11 (#1338): evidence class of the FIFO cost basis; absent on older servers. */
+  cost_basis_evidence?: RhcEvidence;
+  /** Server 2026-11 (#1338): always "unknown" here, this route reads no balances; absent on older servers. */
+  holding_evidence?: "unknown";
+}
+
+export interface RhcTopTradersDataContract {
+  version: string;
+  /** When the response was assembled. NOT source freshness. */
+  assembled_at: string;
+  /** Ranking source watermark; null while unknown (then source_as_of_evidence is "unknown"). */
+  source_as_of: string | null;
+  source_as_of_evidence: RhcEvidence;
+  ranking: { method: "net_eth_flow"; source: "rhc_wallet_token_stats"; source_cursor: string | null; source_cursor_evidence: RhcEvidence; evidence: RhcEvidence };
+  fifo: { method: "fifo_chain_order"; method_version: number; source: "rhc_trades"; window: "token_stored_history"; status: string };
+  coverage: { attributed_only: boolean; attribution_complete_from: string | null };
+  holdings: { evidence: "unknown"; note: string };
+}
+
+export interface RhcTopTradersResponse {
+  chain: Chain;
+  token_address: string;
+  traders: RhcTopTrader[];
+  count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  ranking_metric: "net_eth_flow";
+  metric: string;
+  cost_method: "fifo";
+  /**
+   * `pending` / `failed` appear only when the server's async FIFO outcome is enabled,
+   * never on paid x402 calls (those keep `timeout`). They never carry FIFO rows.
+   */
+  fifo_status: "ok" | "unavailable" | "timeout" | "error" | "pending" | "failed";
+  /** Async outcome only: `live` or `async_job` (a stored result from `fifo_as_of`). Absent otherwise. */
+  fifo_source?: "live" | "async_job" | null;
+  /** Async outcome only: when the FIFO numbers were computed. Absent otherwise. */
+  fifo_as_of?: string | null;
+  /** Async outcome only: the queued computation for this exact question. Absent otherwise. */
+  fifo_job?: {
+    job_key: string;
+    status: "pending" | "ready" | "failed";
+    requested_at: string | null;
+    completed_at: string | null;
+    expires_at: string | null;
+    retry_after_seconds: number | null;
+  } | null;
+  /**
+   * Only on a request that opted in with `Prefer: respond-async` (or `async=true`) while the
+   * server offers the per-request opt-in. `capacity_refused` = nothing was queued; this is the
+   * synchronous answer (`fifo_status` stays `timeout`). Absent otherwise.
+   */
+  async_status?: "applied" | "capacity_refused" | "not_applied";
+  /** Only with `async_status: "capacity_refused"`. */
+  async_capacity_reason?: "queue_busy" | "queue_slow" | "worker_stale" | "queue_unobservable" | "queue_full";
+  fifo_note: string;
+  attribution: { attribution_complete_from: string; note: string };
+  /** Server 2026-11 (#1338): absent on older servers. */
+  data_contract?: RhcTopTradersDataContract;
+}
+
+/* ── FIFO job poll (GET /rhc/fifo-jobs/{job_key}) ── */
+
+/** Only `ready` is a complete answer; every other state has `traders: []` (never zeros). */
+export type RhcFifoJobPollStatus = "pending" | "ready" | "failed" | "expired" | "unknown";
+
+export interface RhcFifoJobPollResponse {
+  chain: Chain;
+  job_key: string;
+  status: RhcFifoJobPollStatus;
+  /** true only for `ready`. */
+  complete: boolean;
+  requested_at: string | null;
+  completed_at: string | null;
+  expires_at: string | null;
+  /** Set only while `pending` (HTTP 202, also sent as `Retry-After`). */
+  retry_after_seconds: number | null;
+  /** When the FIFO numbers were computed (`ready` only). */
+  fifo_as_of: string | null;
+  fifo_method_version: number;
+  /** Empty unless `ready`. */
+  traders: Array<{ trader_eoa: string; fifo: RhcTopTraderFifo }>;
+  count: number;
+  fifo_note: string;
+}
+
+/** Evidence vocabulary of `data_contract`: verified = proven for this answer; inferred = rule over observed data, not proven complete; unknown = not established (never zero). */
+export type DataContractEvidence = "verified" | "inferred" | "unknown";
+
+/** A position recorded by the WRITER of the source table (never a derived time). */
+export interface DataContractIngestWatermark {
+  source: "signal_recovery_checkpoints" | "rhc_holder_fold" | "holder_index";
+  collector: string;
+  stream: string;
+  position: number;
+  position_unit: "slot" | "block";
+  position_time: string | null;
+  recorded_at: string | null;
+  recorded_age_seconds: number | null;
+  semantics: string;
+  /** Freshness bound of this dataset: status `measured` (evidence verified) only when recorded_age_seconds is at most this (Solana trades 120, RHC trades 30). */
+  fresh_within_seconds?: number;
+  /** RHC trades / PnL only: the writer's state at its last checkpoint write. */
+  writer_state?: DataContractRhcWriterState | null;
+}
+
+/** rhc-dex-stream's own state at its last `swaps:committed` write (server 2026-11-21). */
+export interface DataContractRhcWriterState {
+  head_block: number | null;
+  /** head_block - position at the last write. */
+  lag_blocks: number | null;
+  /** Which bound set the position: received | work | loss_owed | owed_window | reconnect_owed. */
+  binding: string | null;
+  /** loss_owed ranges still open (recorded, not yet re-read). 0 = none. */
+  open_loss_owed_ranges: number | null;
+  lowest_open_loss_owed_block: number | null;
+}
+
+/** Server 2026-11: `data_contract` on trades, holders and wallet PnL (both chains). */
+export interface DataContract {
+  version: "sol-token-trades.v1" | "rhc-trades.v1" | "sol-holders.v1" | "rhc-holders.v1" | "sol-wallet-pnl.v1" | "rhc-wallet-pnl.v1" | "sol-kol-feed.v1" | "sol-token.v1" | "sol-deployer.v1";
+  /** When the response was assembled. NOT source freshness. */
+  assembled_at: string;
+  source_as_of: string | null;
+  source_as_of_evidence: DataContractEvidence;
+  source_as_of_basis: string;
+  source_cursor: { position: number; unit: "slot" | "block" } | null;
+  /** null when unmeasured or not applicable (Solana census). Present with `stale`: still a true lower bound. */
+  ingest_watermark: DataContractIngestWatermark | null;
+  /** measured = writer checkpoint recorded within fresh_within_seconds; stale = present but older (never verified). */
+  ingest_watermark_status: "measured" | "stale" | "unmeasured" | "not_applicable";
+  ingest_watermark_evidence: DataContractEvidence;
+  ingest_note: string;
+  method: { name: string; version: string | null };
+  coverage: Record<string, unknown>;
+  evidence: Record<string, DataContractEvidence>;
 }

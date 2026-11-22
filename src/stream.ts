@@ -59,6 +59,7 @@ export type StreamChannel =
   | "rhc:wallet_scores"           // deployer tier changes for filters.wallets (0x deployers) (Phase 4) — PRO+
   | "rhc:dev_activity"            // the token's recorded developer BUYING / SELLING it (RhcDevActivityEvent); never transfers; ring replay only — ULTRA
   | "rhc:token_bundles"           // every NEW same-block buy cluster on any token, launch or later (optional filters.addresses, min_wallets, min_new_wallets, phases, atomic_only) — PRO+
+  | "rhc:token_holders"           // per-token holder state for filters.addresses (snapshot, then changes with a cursor; filters.cursors resumes) — PRO+, address-scoped
   /**
    * @deprecated `rhc:trades` was never a real server channel — 0.4.0 subscribers
    * got a `channels_rejected` warning and silence. The server now accepts it as
@@ -85,6 +86,7 @@ export const STREAM_CHANNELS: readonly StreamChannel[] = [
   "rhc:wallet_scores",
   "rhc:dev_activity",
   "rhc:token_bundles",
+  "rhc:token_holders",
 ];
 
 /** Event names delivered on those channels. */
@@ -102,6 +104,7 @@ export type StreamEventName =
   | "rhc:token_unlock_upcoming"   // on rhc:token_locks with filters.lifecycle: true — an unlock within 24 h (2026-09-23)
   | "rhc:token_unlock_available"  // on rhc:token_locks with filters.lifecycle: true — claimable per the schedule, NOT claimed
   | "rhc:token_price"             // on rhc:token_prices (frame.snapshot === true for the per-address snapshot sent on subscribe)
+  | "rhc:token_holders"           // on rhc:token_holders (data.type snapshot | changes)
   | "rhc:lp_event"                // on rhc:lp_events — add / remove / pool_created (2026-09-23)
   // WS Phase 4 (2026-09-23)
   | "rhc:candle_closed"           // on rhc:token_candles — the stored 1-minute row, revision 0 (RhcCandleClosedEvent)
@@ -248,6 +251,13 @@ export interface StreamEvent<T = unknown> {
   recovered?: string;
   /** true on a token:price state snapshot sent at resume time. */
   snapshot?: boolean;
+  /**
+   * Keys present but computed from stored state rather than the live path (same
+   * method, possibly a few seconds older). On a token:price resume snapshot
+   * with the server's snapshot deltas enabled: mc_change_pct, volume_usd,
+   * mev_volume_pct. Absent on older servers.
+   */
+  approximate?: string[];
 }
 
 /** Outcome of a resume, emitted as `"replay"` after the server's `replay_end`. */
@@ -493,6 +503,13 @@ interface Recovery {
 const HELD_LIVE_CAP = 10_000;
 const DEFAULT_SUB_ID = "default";
 const SUB_ID_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+/** `\u0000<mint>` for a token:trade frame (dedupe key part), else "". */
+const tradeMintSuffix = (f: Frame): string => {
+  if (f.event !== "token:trade") return "";
+  const d = f.data as { mint?: unknown; token_mint?: unknown } | undefined;
+  const m = d && typeof d === "object" ? (d.mint ?? d.token_mint) : undefined;
+  return typeof m === "string" && m ? `\u0000${m}` : "";
+};
 const subIdOf = (f: Frame): string => (typeof f.sub_id === "string" && f.sub_id ? f.sub_id : DEFAULT_SUB_ID);
 
 function isThenable(v: unknown): v is PromiseLike<unknown> {
@@ -1346,8 +1363,11 @@ export class RobinhoodChainStream {
     const id = typeof msg.id === "string" || typeof msg.id === "number" ? String(msg.id) : null;
     if (id !== null && this.opts.dedupeSize > 0) {
       // Dedupe is per (sub_id, channel, id): the same event delivered under two
-      // named subscriptions is two legitimate deliveries.
-      const key = `${subIdOf(msg)}\u0000${String(msg.channel)}\u0000${id}`;
+      // named subscriptions is two legitimate deliveries. token:trade frames add
+      // the mint: both legs of a token-for-token swap share one event_id, and a
+      // server older than the 2026-11-21 id change sends that bare event_id as
+      // the frame id (the new server already puts the mint in the id).
+      const key = `${subIdOf(msg)}\u0000${String(msg.channel)}\u0000${id}${tradeMintSuffix(msg)}`;
       if (this.seen.has(key)) {
         this.seen.delete(key);
         this.seen.set(key, true);

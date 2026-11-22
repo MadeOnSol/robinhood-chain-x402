@@ -152,6 +152,16 @@ export function readPaidResult(res: Response): PaidResultProvenance | null {
   };
 }
 
+/**
+ * The handle that continues recovery of a paid answer that was still pending
+ * (paid_result_in_progress, paid_result_missing, a lost or gateway answer) when
+ * the bound was reached. Re-sends the SAME proof; never signs a new payment.
+ * Undefined for a final answer or an unpaid request.
+ */
+export function pendingResume(res: Response): (() => Promise<Response>) | undefined {
+  return responseMeta.get(res)?.resume;
+}
+
 /** Additive: `{...data, _x402_payment}` for objects, `{data, _x402_payment}` otherwise. */
 export function withPaidResult<T>(data: T, provenance: PaidResultProvenance | null): T | Record<string, unknown> {
   if (!provenance) return data;

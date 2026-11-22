@@ -8,7 +8,7 @@
  *     /api/v1/rhc/… endpoint (all tiers, RHC bundled at no extra cost).
  *   • **Keyless x402 mode** (since 0.7.0) — `{ privateKey: "0x…", paymentPolicy }`: an EVM
  *     wallet holding USDG on Robinhood Chain pays per call on the x402 rail
- *     (/api/x402/rhc/…, 10 endpoints, from $0.04). The client handles the
+ *     (/api/x402/rhc/…, 13 endpoints, from $0.04). The client handles the
  *     402 → sign EIP-3009 `transferWithAuthorization` (EIP-712, viem) → retry
  *     flow itself; the wallet never needs ETH — our facilitator relays gas.
  *     Needs the optional peer dependency `viem` (npm i viem).
@@ -98,6 +98,12 @@ import type {
   WalletTrackerSummaryParams,
   WalletTrackerSummaryResponse,
   StreamToken,
+  RhcTopTradersResponse,
+  RhcFifoJobPollResponse,
+  DataContract,
+  DataContractEvidence,
+  DataContractIngestWatermark,
+  DataContractRhcWriterState,
 } from "./types.js";
 
 import { RobinhoodChainStream } from "./stream.js";
@@ -171,6 +177,10 @@ export type {
   RhcTokenRiskFilters,
   RhcRiskVerdict,
   RhcRiskVerdictChangedEvent,
+  RhcTokenHoldersSnapshot,
+  RhcTokenHoldersChanges,
+  RhcTokenHoldersFrame,
+  RhcHolderCoverageReason,
   RhcRiskVerdictSnapshot,
   RhcWalletScoresFilters,
   RhcDeployerTierChangedEvent,
@@ -328,6 +338,13 @@ export type {
   RhcTrackedWalletSummary,
   WalletTrackerSummaryResponse,
   StreamToken,
+  RhcTopTrader,
+  RhcTopTraderFifo,
+  RhcTopTradersResponse,
+  RhcTopTradersDataContract,
+  RhcFifoJobPollResponse,
+  RhcFifoJobPollStatus,
+  RhcEvidence,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://madeonsol.com";
@@ -339,7 +356,7 @@ export interface RobinhoodChainOptions {
   apiKey?: string;
   /**
    * Keyless x402 mode: hex private key (`0x…`) of an EVM wallet holding USDG on
-   * Robinhood Chain (chain 4663). Pays per call on the 10 keyless endpoints
+   * Robinhood Chain (chain 4663). Pays per call on the 13 keyless endpoints
    * (see `RobinhoodChainX402.KEYLESS_ENDPOINTS`). Needs `viem` installed.
    * Ignored when `apiKey` is also given. NEVER hard-code this — read it from
    * an env var or a secrets manager.
@@ -382,6 +399,9 @@ export class KeylessNotAvailableError extends Error {
 // with src/lib/x402.ts X402_PRICES on the server; the server's discovery doc
 // GET https://madeonsol.com/api/x402/rhc is the source of truth.
 export const KEYLESS_ENDPOINTS = [
+    "/rhc/tokens/{address}/bundle-share",
+    "/rhc/tokens/{address}/top-traders",
+    "/rhc/wallet/{address}",
   "/rhc/kol/feed",
   "/rhc/kol/hot-tokens",
   "/rhc/kol/leaderboard",
@@ -467,7 +487,7 @@ export class RobinhoodChainX402 {
   lastRateLimit: RateLimitInfo = { limit: null, remaining: null, reset: null, requestId: null };
   /** x402 mode: decoded PAYMENT-RESPONSE of the last paid call (settlement tx). */
   lastPayment: X402Settlement | null = null;
-  /** The 10 endpoints available without an API key (USDG pay-per-call). */
+  /** The 13 endpoints available without an API key (USDG pay-per-call). */
   static readonly KEYLESS_ENDPOINTS = KEYLESS_ENDPOINTS;
 
   constructor(opts: RobinhoodChainOptions) {
@@ -911,9 +931,26 @@ export class RobinhoodChainX402 {
    */
   async tokenTopTraders(
     address: string,
-    params?: { limit?: number; offset?: number }
-  ): Promise<unknown> {
+    /**
+     * `async: true` opts this request in to the async FIFO outcome (same as the
+     * `Prefer: respond-async` header) when the server offers it; see `async_status`.
+     */
+    params?: { limit?: number; offset?: number; async?: boolean }
+  ): Promise<RhcTopTradersResponse> {
     return this.request(`/rhc/tokens/${encodeURIComponent(address)}/top-traders`, params);
+  }
+
+  /**
+   * Poll a queued top-traders FIFO computation by the `fifo_job.job_key` a
+   * `tokenTopTraders` answer returned with `fifo_status: "pending"`. One read, never
+   * queues work. Only `status: "ready"` (`complete: true`) carries rows; `pending`
+   * (HTTP 202, poll again after `retry_after_seconds`), `failed`, `expired` and
+   * `unknown` are incomplete answers with `traders: []`. Accounts without the async
+   * FIFO outcome get 404 `fifo_async_not_enabled`. Tier: **PRO+**. Key mode only.
+   * `GET /rhc/fifo-jobs/{job_key}`
+   */
+  async fifoJob(jobKey: string): Promise<RhcFifoJobPollResponse> {
+    return this.request(`/rhc/fifo-jobs/${encodeURIComponent(jobKey)}`);
   }
 
   /**
@@ -965,7 +1002,10 @@ export class RobinhoodChainX402 {
    * in the window left them at zero) and `net` ≈ Δ `holder_count`; a window is
    * null only when the chain had no ingested trades in it. Tier: **PRO+** (50
    * rows; ULTRA/BUSINESS 200). Page with `after` (the previous page's
-   * `next_after` keyset cursor) rather than `offset`.
+   * `next_after` keyset cursor) rather than `offset`. With
+   * `include_wallet_flags: true` the body adds `wallet_flags_meta` {status,
+   * rule_version, source, labels_without_rhc_source, skipped_known_pools_and_burns,
+   * population, note, read_scope} (current page only).
    * `GET /rhc/tokens/{address}/holders`
    */
   async tokenHolders(
