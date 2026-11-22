@@ -100,6 +100,7 @@ import type {
   StreamToken,
   RhcTopTradersResponse,
   RhcFifoJobPollResponse,
+  RhcTokenHoldersResponse,
   DataContract,
   DataContractEvidence,
   DataContractIngestWatermark,
@@ -345,6 +346,17 @@ export type {
   RhcFifoJobPollResponse,
   RhcFifoJobPollStatus,
   RhcEvidence,
+  RhcTokenHoldersResponse,
+  RhcTokenHolder,
+  RhcHolderWalletFlags,
+  RhcHolderLabelCoverage,
+  RhcHolderWalletFlagsMeta,
+  RhcHolderConcentration,
+  RhcHolderGrowth,
+  RhcHolderGrowthWindow,
+  RhcHolderHistoryCoverage,
+  RhcHolderReconciliation,
+  RhcHolderSource,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://madeonsol.com";
@@ -1005,14 +1017,15 @@ export class RobinhoodChainX402 {
    * `next_after` keyset cursor) rather than `offset`. With
    * `include_wallet_flags: true` the body adds `wallet_flags_meta` {status,
    * rule_version, source, labels_without_rhc_source, skipped_known_pools_and_burns,
-   * population, note, read_scope} (current page only).
+   * population, note, read_scope} (current page only). Typed as
+   * `RhcTokenHoldersResponse` since 0.26.1 (was `unknown`).
    * `GET /rhc/tokens/{address}/holders`
    */
   async tokenHolders(
     address: string,
     params?: { limit?: number; offset?: number; after?: string; include_wallet_flags?: boolean }
-  ): Promise<unknown> {
-    return this.request(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params as Record<string, QueryValue> | undefined);
+  ): Promise<RhcTokenHoldersResponse> {
+    return this.request<RhcTokenHoldersResponse>(`/rhc/tokens/${encodeURIComponent(address)}/holders`, params as Record<string, QueryValue> | undefined);
   }
 
   /* ── Deployer hunter ── */

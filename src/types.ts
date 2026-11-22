@@ -3317,3 +3317,155 @@ export interface DataContract {
   coverage: Record<string, unknown>;
   evidence: Record<string, DataContractEvidence>;
 }
+
+/* ── GET /rhc/tokens/{address}/holders (typed in 0.26.1) ── */
+
+/** Per-label evidence on a holder's `wallet_flags`: `evaluated: false` = no sufficient evidence, NOT a verified negative. */
+export interface RhcHolderLabelCoverage {
+  evaluated: boolean;
+  reason: string;
+}
+
+/**
+ * Per-holder flags, only with `include_wallet_flags: true`. null for pools,
+ * burns, invalid addresses or an unavailable source. Robinhood Chain has no
+ * sniper or wallet-level bundler classifier: `is_sniper` / `is_bundler` are always null.
+ */
+export interface RhcHolderWalletFlags {
+  is_sniper: boolean | null;
+  is_bundler: boolean | null;
+  is_kol: boolean;
+  is_alpha_tracked: boolean;
+  likely_bot: boolean | null;
+  is_dumper: boolean;
+  dump_cluster_as_of: string | null;
+  label_coverage: Record<string, RhcHolderLabelCoverage>;
+}
+
+/** One holder row. `balance` is a raw uint256 decimal STRING (do not coerce to a number). */
+export interface RhcTokenHolder {
+  holder: string;
+  balance: string;
+  /** balance / non-burned supply (pools INCLUDED), [0,1]. null on burn rows. */
+  share: number | null;
+  /** balance / total folded supply (pools and burns included), [0,1]. null = unknown. */
+  share_of_supply: number | null;
+  /** balance / circulating supply (pools and burns excluded): the basis of concentration.top1_share. null on pool/burn rows or when unknown. */
+  share_of_circulating: number | null;
+  last_block: number | null;
+  is_pool: boolean;
+  is_burn: boolean;
+  is_deployer: boolean;
+  /** Only with `include_wallet_flags: true`. */
+  wallet_flags?: RhcHolderWalletFlags | null;
+}
+
+/** `wallet_flags_meta`, only with `include_wallet_flags: true` (current holder page only). Open object: the server may add keys. */
+export interface RhcHolderWalletFlagsMeta {
+  status: "available" | "partial" | "unavailable";
+  rule_version: string;
+  source: string;
+  /** Labels with no Robinhood Chain classifier (sniper, bundler): always null on this chain. */
+  labels_without_rhc_source: string[];
+  skipped_known_pools_and_burns: number;
+  population: string;
+  note: string;
+  read_scope: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Concentration over circulating supply (pools and burns excluded).
+ * `holder_count` is null (never 0) without fold data: read `holder_count_status`.
+ */
+export interface RhcHolderConcentration {
+  holder_count: number | null;
+  /** measured = from the Transfer-log fold (a 0 is proven); not_indexed = no holder data for this token; unknown = a 0 on a later page that the page cannot place. */
+  holder_count_status: "measured" | "not_indexed" | "unknown";
+  /** Raw uint256 decimal string. */
+  circulating: string | null;
+  top1_share: number | null;
+  top10_share: number | null;
+  top50_share: number | null;
+  hhi: number | null;
+  pool_held_pct: number | null;
+  burned_pct: number | null;
+  deployer_pct: number | null;
+}
+
+/** One holder-growth window. Every count is null when the window could not be resolved. Pools and burns excluded. */
+export interface RhcHolderGrowthWindow {
+  cutoff_block: number | null;
+  entered: number | null;
+  entered_still_holding: number | null;
+  exited: number | null;
+  /** entered_still_holding - exited, approximately the change in holder_count over the window. */
+  net: number | null;
+}
+
+/** `holder_growth`: null only if the growth read failed; a single window is null when the chain had no ingested trades in it. */
+export interface RhcHolderGrowth {
+  "1h": RhcHolderGrowthWindow | null;
+  "24h": RhcHolderGrowthWindow | null;
+  "7d": RhcHolderGrowthWindow | null;
+  note: string;
+}
+
+/** Per-token history continuity of the Transfer-log fold (present only when the server's coverage read is enabled). `recon_ok` alone does not prove individual balances. */
+export interface RhcHolderHistoryCoverage {
+  state: "verified_interval" | "recovery_pending" | "partial_history";
+  history: string;
+  reason: string | null;
+  fold_from_block: number | null;
+  compared_at_block: number | null;
+  verified_at_block: number | null;
+}
+
+/** recon_supply vs chain_supply at recon_block (supplies are raw uint256 decimal strings). */
+export interface RhcHolderReconciliation {
+  recon_ok: boolean;
+  recon_supply: string | null;
+  chain_supply: string | null;
+  recon_block: number | null;
+  checked_at: string | null;
+}
+
+/** Method, sweep cursor and completeness of the holder fold. */
+export interface RhcHolderSource {
+  method: string;
+  scanned_to_block: number | null;
+  backfill_complete: boolean;
+  last_sweep_at: string | null;
+  note: string;
+}
+
+/**
+ * `GET /rhc/tokens/{address}/holders` (PRO+). **Check `verified` first**: true
+ * only when the reconstructed supply equals on-chain `totalSupply()` at a pinned block.
+ */
+export interface RhcTokenHoldersResponse {
+  chain: "robinhood";
+  token_address: string;
+  verified: boolean;
+  unverified_reason: string | null;
+  holders: RhcTokenHolder[];
+  count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  /** Keyset cursor: pass unchanged as `after`. null on the last page. */
+  next_after: string | null;
+  /** Echo of the `after` this page was read from (null on the first page). */
+  after: string | null;
+  concentration: RhcHolderConcentration | null;
+  /** Plain-language denominator of each per-holder ratio and the burn addresses. */
+  share_basis: Record<string, unknown>;
+  holder_growth: RhcHolderGrowth | null;
+  history_coverage?: RhcHolderHistoryCoverage;
+  reconciliation: RhcHolderReconciliation | null;
+  source: RhcHolderSource;
+  /** Only with `include_wallet_flags: true`. */
+  wallet_flags_meta?: RhcHolderWalletFlagsMeta;
+  /** Data contract (`rhc-holders.v1`). Additive; absent on older servers. */
+  data_contract?: DataContract;
+}
